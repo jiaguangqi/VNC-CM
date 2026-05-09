@@ -494,12 +494,6 @@ Agent 通过命令行参数配置：
 
 ---
 
-## 许可证
-
-[MIT](LICENSE) © Remote Desktop Platform Contributors
-
----
-
 <p align="center">
   Made with ❤️ for remote work
 </p>
