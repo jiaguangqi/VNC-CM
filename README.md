@@ -1,4 +1,4 @@
-# VNC CLuster Mnagaer Platform
+# VNC Cluster Manager Platform
 
 <p align="center">
   <b>远程桌面协同办公平台</b> — 基于 Web 的远程桌面管理与协同办公解决方案
