@@ -1,0 +1,64 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+master-service/master-service
+host-agent/rdp-host-agent
+host-agent/host-agent-*
+ssh-gateway/ssh-gateway
+protocol-gateway/protocol-gateway
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go vendor directory
+vendor/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+pnpm-lock.yaml
+
+# Frontend build output
+frontend/dist/
+frontend/build/
+*.local
+
+# Environment files
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Database
+data/
+postgres_data/
+
+# Backup files
+*.bak
+*.bak.*
+*.bak_*
+
+# Temporary files
+/tmp/
+*.tmp

@@ -1,0 +1,78 @@
+version: "3.8"
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:16-alpine
+    container_name: rdp-postgres
+    environment:
+      POSTGRES_DB: remote_desktop
+      POSTGRES_USER: rdp
+      POSTGRES_PASSWORD: rdp123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rdp -d remote_desktop"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rdp-network
+
+  # Master Service（控制平面）
+  master-service:
+    build:
+      context: ./master-service
+      dockerfile: Dockerfile
+    container_name: rdp-master
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: rdp
+      DB_PASSWORD: rdp123
+      DB_NAME: remote_desktop
+      DB_SSLMODE: disable
+      JWT_SECRET: change-me-in-production-32byte!
+      JWT_ACCESS_EXPIRY: 15
+      JWT_REFRESH_EXPIRY: 7
+      JWT_ISSUER: remote-desktop-platform
+      CREDENTIAL_MASTER_KEY: must-be-32-bytes-for-aes256-gcm!
+      HTTP_PORT: :8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - rdp-network
+
+  # 前端 React 应用（开发模式）
+  frontend:
+    image: node:20-alpine
+    container_name: rdp-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=/api/v1
+    depends_on:
+      - master-service
+    networks:
+      - rdp-network
+
+volumes:
+  postgres_data:
+
+networks:
+  rdp-network:
+    driver: bridge

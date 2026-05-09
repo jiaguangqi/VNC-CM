@@ -1,0 +1,405 @@
+:root {
+  --rdp-bg: #f5f7fa;
+  --rdp-surface: rgba(255, 255, 255, 0.96);
+  --rdp-surface-strong: #ffffff;
+  --rdp-border: #e5eaf2;
+  --rdp-border-strong: #dbe3ef;
+  --rdp-text: #1d2129;
+  --rdp-text-soft: #4e5969;
+  --rdp-text-muted: #86909c;
+  --rdp-primary: #1677ff;
+  --rdp-primary-strong: #0b1426;
+  --rdp-primary-soft: #e8f2ff;
+  --rdp-success: #52c41a;
+  --rdp-warning: #faad14;
+  --rdp-danger: #ff4d4f;
+  --rdp-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+  --rdp-shadow-soft: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--rdp-text);
+  font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(22, 119, 255, 0.08), transparent 28%),
+    linear-gradient(180deg, #fbfcfe 0%, #f5f7fa 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.rdp-app-shell.ant-layout {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.rdp-app-shell .ant-layout-sider {
+  margin: 16px 0 16px 16px;
+  border-radius: 20px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, #0f1f3d 0%, #0b1426 100%) !important;
+  box-shadow: 0 20px 48px rgba(4, 13, 31, 0.24);
+}
+
+.rdp-sider-inner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.rdp-brand {
+  padding: 20px 18px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.rdp-brand-badge {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #1677ff;
+  background: #ffffff;
+  font-weight: 700;
+  font-size: 15px;
+  box-shadow: inset 0 0 0 1px rgba(22, 119, 255, 0.18);
+}
+
+.rdp-brand-title {
+  margin-top: 16px;
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.rdp-brand-subtitle {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.rdp-app-shell .ant-menu {
+  background: transparent !important;
+  border-inline-end: none !important;
+  padding: 14px 10px;
+}
+
+.rdp-app-shell .ant-menu-item {
+  height: 44px;
+  margin: 6px 0 !important;
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+
+.rdp-app-shell .ant-menu-item:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.rdp-app-shell .ant-menu-item-selected {
+  color: #ffffff !important;
+  background:
+    linear-gradient(90deg, #1677ff 0%, #2f8cff 100%) !important;
+  box-shadow: 0 12px 24px rgba(22, 119, 255, 0.28);
+}
+
+.rdp-main-layout.ant-layout {
+  background: transparent;
+}
+
+.rdp-topbar {
+  height: auto;
+  margin: 16px 16px 0;
+  padding: 16px 22px;
+  border: 1px solid rgba(219, 227, 239, 0.72);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9) !important;
+  box-shadow: var(--rdp-shadow-soft);
+  line-height: normal;
+}
+
+.rdp-topbar-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--rdp-text);
+}
+
+.rdp-topbar-subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--rdp-text-muted);
+}
+
+.rdp-content-shell {
+  margin: 16px;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.rdp-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.rdp-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.rdp-page-heading {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--rdp-text);
+}
+
+.rdp-page-description {
+  margin-top: 8px;
+  color: var(--rdp-text-muted);
+  font-size: 14px;
+}
+
+.rdp-panel,
+.rdp-stat-card,
+.rdp-table-card,
+.rdp-soft-card.ant-card,
+.rdp-viewer-card.ant-card {
+  border: 1px solid rgba(219, 227, 239, 0.72) !important;
+  border-radius: 18px !important;
+  background: var(--rdp-surface) !important;
+  box-shadow: var(--rdp-shadow-soft);
+}
+
+.rdp-stat-card.ant-card .ant-card-body,
+.rdp-table-card.ant-card .ant-card-body,
+.rdp-soft-card.ant-card .ant-card-body {
+  padding: 18px !important;
+}
+
+.rdp-stat-label {
+  color: var(--rdp-text-soft);
+  font-size: 13px;
+}
+
+.rdp-stat-value {
+  margin-top: 8px;
+  font-size: 38px;
+  font-weight: 700;
+  color: var(--rdp-text);
+  line-height: 1;
+}
+
+.rdp-stat-meta {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--rdp-text-muted);
+  font-size: 12px;
+}
+
+.rdp-trend-line {
+  margin-top: 18px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(22, 119, 255, 0.08), rgba(22, 119, 255, 0));
+  position: relative;
+  overflow: hidden;
+}
+
+.rdp-trend-line::after {
+  content: "";
+  position: absolute;
+  inset: 8px 10px 10px;
+  border-bottom: 2px solid currentColor;
+  border-right: 2px solid transparent;
+  clip-path: polygon(0 78%, 16% 72%, 30% 74%, 46% 52%, 58% 60%, 74% 28%, 86% 40%, 100% 8%, 100% 100%, 0 100%);
+}
+
+.rdp-section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.rdp-section-subtitle {
+  margin-top: 6px;
+  color: var(--rdp-text-muted);
+  font-size: 13px;
+}
+
+.rdp-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rdp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--rdp-border);
+  background: #fff;
+  color: var(--rdp-text-soft);
+  font-size: 12px;
+}
+
+.rdp-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.rdp-grid.rdp-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.rdp-grid.rdp-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.rdp-grid.rdp-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rdp-app-shell .ant-card-head {
+  border-bottom-color: rgba(229, 234, 242, 0.82) !important;
+}
+
+.rdp-app-shell .ant-table-wrapper .ant-table {
+  background: transparent;
+}
+
+.rdp-app-shell .ant-table-wrapper .ant-table-thead > tr > th {
+  background: #f8fafc !important;
+  color: var(--rdp-text-soft);
+  font-weight: 600;
+  border-bottom: 1px solid var(--rdp-border) !important;
+}
+
+.rdp-app-shell .ant-table-wrapper .ant-table-tbody > tr > td {
+  border-bottom: 1px solid rgba(229, 234, 242, 0.72) !important;
+}
+
+.rdp-app-shell .ant-table-wrapper .ant-table-tbody > tr:hover > td {
+  background: rgba(22, 119, 255, 0.03) !important;
+}
+
+.rdp-app-shell .ant-btn {
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.rdp-app-shell .ant-btn-primary {
+  box-shadow: 0 10px 22px rgba(22, 119, 255, 0.18);
+}
+
+.rdp-app-shell .ant-input,
+.rdp-app-shell .ant-input-password,
+.rdp-app-shell .ant-input-number,
+.rdp-app-shell .ant-select-selector {
+  border-radius: 10px !important;
+}
+
+.rdp-app-shell .ant-modal-content {
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.rdp-app-shell .ant-tabs .ant-tabs-tab {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.rdp-notice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rdp-notice-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rdp-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.rdp-dot.green { background: var(--rdp-success); }
+.rdp-dot.blue { background: var(--rdp-primary); }
+.rdp-dot.orange { background: var(--rdp-warning); }
+.rdp-dot.red { background: var(--rdp-danger); }
+
+.rdp-desktop-preview {
+  min-height: 260px;
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(11, 20, 38, 0.88), rgba(11, 20, 38, 0.94)),
+    radial-gradient(circle at top, rgba(22, 119, 255, 0.22), transparent 30%);
+}
+
+@media (max-width: 1400px) {
+  .rdp-grid.rdp-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .rdp-app-shell .ant-layout-sider {
+    margin-right: 8px;
+  }
+
+  .rdp-grid.rdp-grid-3,
+  .rdp-grid.rdp-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .rdp-app-shell .ant-layout-sider {
+    position: fixed !important;
+    z-index: 1000;
+    height: calc(100vh - 32px);
+  }
+
+  .rdp-topbar,
+  .rdp-content-shell {
+    margin-left: 16px;
+  }
+
+  .rdp-grid.rdp-grid-4 {
+    grid-template-columns: 1fr;
+  }
+
+  .rdp-topbar-title,
+  .rdp-page-heading {
+    font-size: 22px;
+  }
+}

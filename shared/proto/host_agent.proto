@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package hostagent;
+
+option go_package = "github.com/remote-desktop/shared/proto;proto";
+
+// Host registration and management
+service HostAgentService {
+  rpc RegisterHost(RegisterHostRequest) returns (RegisterHostResponse);
+
+  // Bidirectional stream for heartbeat and instructions
+  rpc HostStream(stream HostMessage) returns (stream MasterMessage);
+}
+
+message RegisterHostRequest {
+  string hostname = 1;
+  string ip_address = 2;
+  string os_type = 3; // "linux" or "windows"
+  int32 cpu_cores = 4;
+  int64 total_ram_mb = 5;
+  int32 max_sessions = 6;
+  string agent_version = 7;
+  repeated GPUInfo gpus = 8;
+  string region = 9;
+  string az = 10;
+}
+
+message GPUInfo {
+  string model = 1;
+  int32 count = 2;
+  int64 memory_mb = 3;
+}
+
+message RegisterHostResponse {
+  string host_id = 1;
+  string agent_token = 2;
+  bool success = 3;
+  string error_message = 4;
+}
+
+message HostMessage {
+  oneof payload {
+    Heartbeat heartbeat = 1;
+    ResourceReport resource_report = 2;
+    DesktopStatusUpdate desktop_update = 3;
+    DesktopSessionInfo session_info = 4;
+  }
+  string host_id = 10;
+  int64 timestamp = 11;
+}
+
+message MasterMessage {
+  oneof payload {
+    CreateDesktopInstruction create_desktop = 1;
+    TerminateDesktopInstruction terminate_desktop = 2;
+    UpdateConfigInstruction update_config = 3;
+  }
+  string instruction_id = 10;
+  int64 timestamp = 11;
+}
+
+message Heartbeat {
+  int64 sequence = 1;
+}
+
+message ResourceReport {
+  float cpu_usage_percent = 1;
+  int64 available_ram_mb = 2;
+  int32 active_sessions = 3;
+  float gpu_usage_percent = 4;
+  int64 available_gpu_memory_mb = 5;
+  float disk_usage_percent = 6;
+}
+
+message DesktopStatusUpdate {
+  string session_id = 1;
+  string status = 2;
+  string error_message = 3;
+}
+
+message DesktopSessionInfo {
+  string session_id = 1;
+  string protocol = 2;
+  string host_ip = 3;
+  int32 port = 4;
+  string password = 5;
+  string native_url = 6;
+  int64 created_at = 7;
+}
+
+message CreateDesktopInstruction {
+  string session_id = 1;
+  string username = 2;
+  string protocol = 3;
+  string resolution = 4;
+  int32 color_depth = 5;
+  int32 timeout_minutes = 6;
+  bool require_gpu = 7;
+  int32 requested_gpu_count = 8;
+}
+
+message TerminateDesktopInstruction {
+  string session_id = 1;
+  bool force = 2;
+}
+
+message UpdateConfigInstruction {
+  int32 max_sessions = 1;
+  int64 heartbeat_interval_seconds = 2;
+}
