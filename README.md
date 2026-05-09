@@ -1,4 +1,4 @@
-# Remote Desktop Collaboration Platform
+# VNC CLuster Mnagaer Platform
 
 <p align="center">
   <b>远程桌面协同办公平台</b> — 基于 Web 的远程桌面管理与协同办公解决方案
@@ -19,7 +19,7 @@
 
 ## 项目简介
 
-Remote Desktop Collaboration Platform 是一个面向企业级场景的远程桌面协同办公平台。它提供了基于 Web 的远程桌面访问、多用户协同操作、文件传输、宿主机统一管理等功能，支持在现代浏览器中直接访问远程桌面，无需安装额外的客户端软件。
+VNC CLuster Mnagaer Platform 是一个面向企业级场景的远程桌面协同办公平台。它提供了基于 Web 的远程桌面访问、多用户协同操作、文件传输、宿主机统一管理等功能，支持在现代浏览器中直接访问远程桌面，无需安装额外的客户端软件。
 
 ### 主要应用场景
 
@@ -93,8 +93,8 @@ node --version          # v20.x.x
 
 ```bash
 # 克隆项目
-git clone https://github.com/yourusername/remote-desktop-platform.git
-cd remote-desktop-platform
+git clone https://github.com/jiaguangqi/VNC-CM.git
+cd VNC-CM
 
 # 方式一：使用安装脚本（推荐）
 chmod +x install.sh
