@@ -44,6 +44,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(jwtMiddleware, &cfg.LDAP)
 	hostHandler := handlers.NewHostHandler(encryptor)
 	desktopHandler := handlers.NewDesktopHandler(encryptor)
+	statsHandler := handlers.NewStatsHandler()
 
 	// 初始化 Gin 路由
 	router := gin.Default()
@@ -91,6 +92,10 @@ func main() {
 			authorized.GET("/collaborations", collabHandler.ListMyInvites)
 			authorized.POST("/collaborations", collabHandler.Invite)
 			authorized.DELETE("/collaborations/:id", collabHandler.Stop)
+
+		// 统计数据（需要认证）
+		authorized.GET("/stats/overview", statsHandler.GetOverview)
+		authorized.GET("/stats/trend", statsHandler.GetTrend)
 
 		// 宿主机管理（仅管理员）
 		admin := authorized.Group("")

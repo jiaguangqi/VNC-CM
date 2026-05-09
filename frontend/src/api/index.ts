@@ -93,4 +93,9 @@ export const collaborationAPI = {
   stop: (id: string) => api.delete(`/collaborations/${id}`),
 };
 
+export const statsAPI = {
+  overview: () => api.get('/stats/overview'),
+  trend: (days: number = 7) => api.get('/stats/trend', { params: { days } }),
+};
+
 export default api;
