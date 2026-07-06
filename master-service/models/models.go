@@ -65,6 +65,8 @@ type Session struct {
 	ID                  uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
 	UserID              uuid.UUID      `gorm:"type:uuid;not null;index" json:"user_id"`
 	HostID              uuid.UUID      `gorm:"type:uuid;not null;index" json:"host_id"`
+	DisplayName         string         `gorm:"size:64" json:"display_name,omitempty"`
+	Purpose             string         `gorm:"size:200" json:"purpose,omitempty"`
 	Protocol            string         `gorm:"size:16;not null" json:"protocol"`                       // vnc, rdp, spice, x2go, pcoip
 	VncBackend          string         `gorm:"size:16;not null;default:'turbovnc'" json:"vnc_backend"` // turbovnc, tigervnc
 	Resolution          string         `gorm:"size:16;default:'1920x1080'" json:"resolution"`

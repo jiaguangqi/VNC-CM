@@ -37,11 +37,11 @@ func (m *DesktopHealthMonitor) Start() {
 		ticker := time.NewTicker(m.interval)
 		defer ticker.Stop()
 
-		m.reconcileRunningSessions()
+		m.reconcileActiveSessions()
 		for {
 			select {
 			case <-ticker.C:
-				m.reconcileRunningSessions()
+				m.reconcileActiveSessions()
 			case <-m.stopCh:
 				return
 			}
@@ -53,10 +53,10 @@ func (m *DesktopHealthMonitor) Stop() {
 	close(m.stopCh)
 }
 
-func (m *DesktopHealthMonitor) reconcileRunningSessions() {
+func (m *DesktopHealthMonitor) reconcileActiveSessions() {
 	var sessions []models.Session
 	if err := database.DB.
-		Where("status = ?", models.SessionStatusRunning).
+		Where("status IN ?", []string{models.SessionStatusRunning, models.SessionStatusError}).
 		Preload("Host").
 		Preload("User").
 		Find(&sessions).Error; err != nil {
@@ -69,53 +69,64 @@ func (m *DesktopHealthMonitor) reconcileRunningSessions() {
 			continue
 		}
 
-		display, wsPort, err := sessionDisplayAndWSPort(session)
+		display, vncPort, wsPort, err := sessionDisplayAndPorts(session)
 		if err != nil {
-			m.markSessionError(session, fmt.Sprintf("连接信息无效: %v", err))
+			if session.Status == models.SessionStatusRunning {
+				m.markSessionError(session, fmt.Sprintf("连接信息无效: %v", err))
+			}
 			continue
 		}
 
-		if err := m.checkRemoteDesktop(session.Host, session.User.Username, display, wsPort); err != nil {
-			m.markSessionError(session, fmt.Sprintf("桌面进程健康检查失败: %v", err))
+		if err := m.checkRemoteDesktop(session.Host, session.User.Username, display, vncPort, wsPort); err != nil {
+			if session.Status == models.SessionStatusRunning {
+				m.markSessionError(session, fmt.Sprintf("桌面进程健康检查失败: %v", err))
+			}
+			continue
+		}
+
+		if session.Status == models.SessionStatusError {
+			m.markSessionRecovered(session)
 		}
 	}
 }
 
-func sessionDisplayAndWSPort(session models.Session) (int, int, error) {
+func sessionDisplayAndPorts(session models.Session) (int, int, int, error) {
 	if session.ConnectionInfo == "" {
-		return 0, 0, fmt.Errorf("connection_info 为空")
+		return 0, 0, 0, fmt.Errorf("connection_info 为空")
 	}
 
 	var connInfo map[string]interface{}
 	if err := json.Unmarshal([]byte(session.ConnectionInfo), &connInfo); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 
 	displayValue, ok := connInfo["display"]
 	if !ok {
-		return 0, 0, fmt.Errorf("缺少 display")
+		return 0, 0, 0, fmt.Errorf("缺少 display")
 	}
 	display, ok := numericJSONValueToInt(displayValue)
 	if !ok || display <= 0 {
-		return 0, 0, fmt.Errorf("display 无效")
+		return 0, 0, 0, fmt.Errorf("display 无效")
 	}
 
-	portValue, ok := connInfo["ws_port"]
+	vncPortValue, ok := connInfo["port"]
 	if !ok {
-		portValue, ok = connInfo["port"]
-		if !ok {
-			return 0, 0, fmt.Errorf("缺少 port")
+		return 0, 0, 0, fmt.Errorf("缺少 port")
+	}
+	vncPort, ok := numericJSONValueToInt(vncPortValue)
+	if !ok || vncPort <= 0 {
+		return 0, 0, 0, fmt.Errorf("port 无效")
+	}
+
+	wsPort := vncPort + 200
+	if wsPortValue, hasWSPort := connInfo["ws_port"]; hasWSPort {
+		wsPort, ok = numericJSONValueToInt(wsPortValue)
+		if !ok || wsPort <= 0 {
+			return 0, 0, 0, fmt.Errorf("ws_port 无效")
 		}
 	}
-	port, ok := numericJSONValueToInt(portValue)
-	if !ok || port <= 0 {
-		return 0, 0, fmt.Errorf("port 无效")
-	}
-	if _, hasWSPort := connInfo["ws_port"]; hasWSPort {
-		return display, port, nil
-	}
 
-	return display, port + 200, nil
+	return display, vncPort, wsPort, nil
 }
 
 func numericJSONValueToInt(value interface{}) (int, bool) {
@@ -132,14 +143,14 @@ func numericJSONValueToInt(value interface{}) (int, bool) {
 	}
 }
 
-func (m *DesktopHealthMonitor) checkRemoteDesktop(host models.Host, username string, display, wsPort int) error {
+func (m *DesktopHealthMonitor) checkRemoteDesktop(host models.Host, username string, display, vncPort, wsPort int) error {
 	client, err := m.dialHost(host)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	cmd := buildDesktopHealthCommand(username, display, wsPort)
+	cmd := buildDesktopHealthCommand(username, display, vncPort, wsPort)
 	session, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建 SSH session 失败: %w", err)
@@ -189,11 +200,11 @@ func (m *DesktopHealthMonitor) dialHost(host models.Host) (*ssh.Client, error) {
 	return client, nil
 }
 
-func buildDesktopHealthCommand(username string, display, wsPort int) string {
+func buildDesktopHealthCommand(username string, display, vncPort, wsPort int) string {
 	userArg := shellQuote(username)
 	displayArg := shellQuote(":" + strconv.Itoa(display))
 
-	return fmt.Sprintf(`user=%s; display=%s; wsport=%d; if command -v ss >/dev/null 2>&1; then ss -ltn | grep -Eq "[:.]${wsport}[[:space:]]"; else netstat -ltn 2>/dev/null | grep -Eq "[:.]${wsport}[[:space:]]"; fi && ps -u "$user" -o args= | grep -Ev "grep" | grep -E "(Xvnc|Xtigervnc|vncserver).*${display}"`, userArg, displayArg, wsPort)
+	return fmt.Sprintf(`user=%s; display=%s; vncport=%d; wsport=%d; check_listen() { if command -v ss >/dev/null 2>&1; then ss -ltn | grep -Eq "[:.]$1[[:space:]]"; else netstat -ltn 2>/dev/null | grep -Eq "[:.]$1[[:space:]]"; fi; }; ps -u "$user" -o args= | grep -Ev "grep" | grep -E "(Xvnc|Xtigervnc|vncserver).*${display}" >/dev/null || { echo "vnc display ${display} not running"; exit 11; }; check_listen "$wsport" || { nohup websockify --web=/opt/noVNC --cert=/dev/null "$wsport" "localhost:$vncport" >/dev/null 2>&1 & sleep 1; }; check_listen "$wsport" || { echo "websockify port ${wsport} not listening"; exit 12; }`, userArg, displayArg, vncPort, wsPort)
 }
 
 func shellQuote(value string) string {
@@ -235,4 +246,38 @@ func (m *DesktopHealthMonitor) markSessionError(session models.Session, message 
 	}
 
 	log.Printf("桌面健康检查异常 session_id=%s host=%s: %s", session.ID, session.Host.Hostname, message)
+}
+
+func (m *DesktopHealthMonitor) markSessionRecovered(session models.Session) {
+	connInfo := make(map[string]interface{})
+	if session.ConnectionInfo != "" {
+		_ = json.Unmarshal([]byte(session.ConnectionInfo), &connInfo)
+	}
+	delete(connInfo, "error")
+	connInfo["last_health_check_at"] = time.Now().UTC().Format(time.RFC3339)
+	connInfoJSON, _ := json.Marshal(connInfo)
+
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.Session{}).
+			Where("id = ? AND status = ?", session.ID, models.SessionStatusError).
+			Updates(map[string]interface{}{
+				"status":          models.SessionStatusRunning,
+				"connection_info": string(connInfoJSON),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		return tx.Model(&models.Host{}).
+			Where("id = ? AND current_sessions < max_sessions", session.HostID).
+			Update("current_sessions", gorm.Expr("current_sessions + 1")).Error
+	})
+	if err != nil {
+		log.Printf("恢复桌面运行状态失败 session_id=%s: %v", session.ID, err)
+		return
+	}
+
+	log.Printf("桌面健康检查恢复 session_id=%s host=%s", session.ID, session.Host.Hostname)
 }

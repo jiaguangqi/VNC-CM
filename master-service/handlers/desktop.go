@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -35,6 +36,8 @@ func NewDesktopHandler(encryptor *services.EncryptionService, maxDesktopsPerUser
 }
 
 type CreateDesktopRequest struct {
+	DisplayName        string `json:"display_name" binding:"omitempty,max=64"`
+	Purpose            string `json:"purpose" binding:"omitempty,max=200"`
 	DesktopEnv         string `json:"desktop_env" binding:"omitempty,oneof=gnome xfce"`
 	Protocol           string `json:"protocol" binding:"required,oneof=vnc rdp spice"`
 	Resolution         string `json:"resolution" binding:"required"`
@@ -46,6 +49,8 @@ type CreateDesktopRequest struct {
 
 type DesktopResponse struct {
 	ID                  string                 `json:"id"`
+	DisplayName         string                 `json:"display_name,omitempty"`
+	Purpose             string                 `json:"purpose,omitempty"`
 	Protocol            string                 `json:"protocol"`
 	VncBackend          string                 `json:"vnc_backend,omitempty"`
 	Resolution          string                 `json:"resolution"`
@@ -92,7 +97,10 @@ func (h *DesktopHandler) ListDesktops(c *gin.Context) {
 	for _, s := range sessions {
 		dr := DesktopResponse{
 			ID:                  s.ID.String(),
+			DisplayName:         s.DisplayName,
+			Purpose:             s.Purpose,
 			Protocol:            s.Protocol,
+			VncBackend:          s.VncBackend,
 			Resolution:          s.Resolution,
 			PerformanceProfile:  s.PerformanceProfile,
 			CurrentBandwidthBps: s.CurrentBandwidthBps,
@@ -127,11 +135,16 @@ func (h *DesktopHandler) ListDesktops(c *gin.Context) {
 func (h *DesktopHandler) GetDesktopDetail(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	uid := userID.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
 	sessionID := c.Param("id")
 
 	var session models.Session
-	if err := database.DB.Where("id = ? AND user_id = ?", sessionID, uid).
-		Preload("Host").
+	query := database.DB.Where("id = ?", sessionID).Preload("Host").Preload("User")
+	if roleStr != "admin" {
+		query = query.Where("user_id = ?", uid)
+	}
+	if err := query.
 		First(&session).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "桌面会话不存在"})
@@ -143,7 +156,10 @@ func (h *DesktopHandler) GetDesktopDetail(c *gin.Context) {
 
 	dr := DesktopResponse{
 		ID:                  session.ID.String(),
+		DisplayName:         session.DisplayName,
+		Purpose:             session.Purpose,
 		Protocol:            session.Protocol,
+		VncBackend:          session.VncBackend,
 		Resolution:          session.Resolution,
 		PerformanceProfile:  session.PerformanceProfile,
 		CurrentBandwidthBps: session.CurrentBandwidthBps,
@@ -169,6 +185,50 @@ func (h *DesktopHandler) GetDesktopDetail(c *gin.Context) {
 	c.JSON(http.StatusOK, dr)
 }
 
+func (h *DesktopHandler) GetDesktopThumbnail(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	uid := userID.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
+	sessionID := c.Param("id")
+
+	var session models.Session
+	query := database.DB.Where("id = ?", sessionID).Preload("Host").Preload("User")
+	if roleStr != "admin" {
+		query = query.Where("user_id = ?", uid)
+	}
+	if err := query.First(&session).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "桌面会话不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+	if session.Status != models.SessionStatusRunning {
+		c.JSON(http.StatusConflict, gin.H{"error": "仅运行中的桌面支持缩略图"})
+		return
+	}
+	if !hostSupportsSSH(session.Host) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "宿主机未配置 SSH，无法获取缩略图"})
+		return
+	}
+
+	display, _ := sessionDisplayAndWSPort(session)
+	if display <= 0 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "桌面 display 信息无效"})
+		return
+	}
+
+	png, err := h.captureVNCThumbnail(session.Host, session.User.Username, session.ID.String(), display)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "image/png", png)
+}
+
 func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	uid := userID.(string)
@@ -188,6 +248,8 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.Purpose = strings.TrimSpace(req.Purpose)
 
 	if err := h.ensureUserDesktopQuota(uid); err != nil {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
@@ -281,6 +343,7 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	if vncBackend == "" {
 		vncBackend = "tigervnc"
 	}
+	vncBackend = h.resolveVNCBackend(host, vncBackend)
 
 	colorDepth := req.ColorDepth
 	if colorDepth == 0 {
@@ -309,6 +372,8 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	session := models.Session{
 		UserID:             uidUUID,
 		HostID:             host.ID,
+		DisplayName:        req.DisplayName,
+		Purpose:            req.Purpose,
 		Protocol:           req.Protocol,
 		VncBackend:         vncBackend,
 		Resolution:         req.Resolution,
@@ -334,6 +399,8 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		}, c.ClientIP())
 		c.JSON(http.StatusCreated, DesktopResponse{
 			ID:                 session.ID.String(),
+			DisplayName:        session.DisplayName,
+			Purpose:            session.Purpose,
 			Protocol:           session.Protocol,
 			VncBackend:         session.VncBackend,
 			Resolution:         session.Resolution,
@@ -383,6 +450,8 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, DesktopResponse{
 		ID:                 session.ID.String(),
+		DisplayName:        session.DisplayName,
+		Purpose:            session.Purpose,
 		Protocol:           session.Protocol,
 		VncBackend:         session.VncBackend,
 		Resolution:         session.Resolution,
@@ -443,6 +512,28 @@ func hostSupportsSSH(host models.Host) bool {
 
 func (h *DesktopHandler) isHostAgentOnline(host models.Host) bool {
 	return h.agentServer != nil && h.agentServer.IsHostOnline(host.ID.String())
+}
+
+func (h *DesktopHandler) resolveVNCBackend(host models.Host, requested string) string {
+	if requested != "turbovnc" || !hostSupportsSSH(host) {
+		return requested
+	}
+	client, err := h.dialHostSSH(host)
+	if err != nil {
+		return requested
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return requested
+	}
+	defer session.Close()
+
+	if err := session.Run("test -x /opt/TurboVNC/bin/Xvnc"); err != nil {
+		return "tigervnc"
+	}
+	return requested
 }
 
 func (h *DesktopHandler) dispatchCreateToAgentIfOnline(host models.Host, session models.Session, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend, vncOptions string) bool {
@@ -506,22 +597,108 @@ func (h *DesktopHandler) dispatchTerminateToAgentIfOnline(session models.Session
 	return h.agentServer.SendInstructionToHost(session.HostID.String(), inst) == nil
 }
 
+func (h *DesktopHandler) captureVNCThumbnail(host models.Host, linuxUser, sessionID string, display int) ([]byte, error) {
+	client, err := h.dialHostSSH(host)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	tmpPath := fmt.Sprintf("/tmp/rdp-thumb-%s.png", sessionID)
+	cmd := fmt.Sprintf(
+		`command -v gnome-screenshot >/dev/null 2>&1 || { echo missing gnome-screenshot; exit 127; }; rm -f %[1]s; su - %[2]s -c %[3]s >/dev/null 2>&1; status=$?; if [ "$status" -ne 0 ]; then rm -f %[1]s; echo gnome-screenshot failed; exit "$status"; fi; base64 %[1]s | tr -d '\n'; rm -f %[1]s`,
+		shellQuote(tmpPath),
+		shellQuote(linuxUser),
+		shellQuote(fmt.Sprintf("DISPLAY=:%d gnome-screenshot -f %s", display, shellQuote(tmpPath))),
+	)
+
+	sshSession, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("创建 SSH session 失败: %w", err)
+	}
+	defer sshSession.Close()
+
+	output, err := sshSession.CombinedOutput(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("获取桌面缩略图失败: %w, output: %s", err, strings.TrimSpace(string(output)))
+	}
+	png, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(output)))
+	if err != nil {
+		return nil, fmt.Errorf("解析桌面缩略图失败: %w", err)
+	}
+	return png, nil
+}
+
 func decrementHostSessionIfRunning(host models.Host, previousStatus string) {
 	if previousStatus == models.SessionStatusRunning && host.CurrentSessions > 0 {
 		database.DB.Model(&host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
 	}
 }
 
+func activeDesktopStatuses() []string {
+	return []string{
+		models.SessionStatusPending,
+		models.SessionStatusStarting,
+		models.SessionStatusRunning,
+		models.SessionStatusStopping,
+		models.SessionStatusError,
+	}
+}
+
+func (h *DesktopHandler) terminateSession(session models.Session, actorID, clientIP, auditAction string, extraMeta map[string]interface{}) error {
+	display, wsPort := sessionDisplayAndWSPort(session)
+	previousStatus := session.Status
+	if previousStatus == models.SessionStatusTerminated {
+		return nil
+	}
+
+	if err := database.DB.Model(&session).Update("status", models.SessionStatusStopping).Error; err != nil {
+		return err
+	}
+
+	via := ""
+	if display > 0 && session.Host.ID != uuid.Nil && hostSupportsSSH(session.Host) {
+		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+		via = "ssh"
+	} else if h.dispatchTerminateToAgentIfOnline(session, display, wsPort) {
+		via = "agent"
+	} else if display <= 0 && previousStatus != models.SessionStatusRunning {
+		via = "metadata"
+	} else {
+		database.DB.Model(&session).Update("status", previousStatus)
+		return fmt.Errorf("Host Agent 未在线，且宿主机未配置 SSH 回退，无法关闭桌面")
+	}
+
+	if err := database.DB.Model(&session).Update("status", models.SessionStatusTerminated).Error; err != nil {
+		return err
+	}
+	decrementHostSessionIfRunning(session.Host, previousStatus)
+
+	meta := map[string]interface{}{
+		"previous_status": previousStatus,
+		"host_id":         session.HostID.String(),
+		"via":             via,
+	}
+	for key, value := range extraMeta {
+		meta[key] = value
+	}
+	services.RecordAudit(actorID, auditAction, "session", session.ID.String(), meta, clientIP)
+	return nil
+}
+
 func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	uid := userID.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
 	sessionID := c.Param("id")
 
 	var session models.Session
-	if err := database.DB.Where("id = ? AND user_id = ?", sessionID, uid).
-		Preload("Host").
-		Preload("User").
-		First(&session).Error; err != nil {
+	query := database.DB.Where("id = ?", sessionID).Preload("Host").Preload("User")
+	if roleStr != "admin" {
+		query = query.Where("user_id = ?", uid)
+	}
+	if err := query.First(&session).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "桌面会话不存在"})
 			return
@@ -530,36 +707,15 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 		return
 	}
 
-	display, wsPort := sessionDisplayAndWSPort(session)
-
-	previousStatus := session.Status
-	if previousStatus == models.SessionStatusTerminated {
+	if session.Status == models.SessionStatusTerminated {
 		c.JSON(http.StatusOK, gin.H{"message": "桌面会话已关闭"})
 		return
 	}
 
-	database.DB.Model(&session).Update("status", models.SessionStatusStopping)
-
-	if h.dispatchTerminateToAgentIfOnline(session, display, wsPort) {
-		decrementHostSessionIfRunning(session.Host, previousStatus)
-		services.RecordAudit(uid, "desktop_close_dispatch", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "via": "agent"}, c.ClientIP())
-		c.JSON(http.StatusOK, gin.H{"message": "桌面正在关闭"})
+	if err := h.terminateSession(session, uid, c.ClientIP(), "desktop_close", map[string]interface{}{"admin": roleStr == "admin"}); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 		return
 	}
-
-	if !hostSupportsSSH(session.Host) {
-		database.DB.Model(&session).Update("status", previousStatus)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Host Agent 未在线，且宿主机未配置 SSH 回退，无法关闭桌面"})
-		return
-	}
-
-	if display > 0 {
-		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
-	}
-
-	database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
-	decrementHostSessionIfRunning(session.Host, previousStatus)
-	services.RecordAudit(uid, "desktop_close", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String()}, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "桌面会话已关闭"})
 }
@@ -647,7 +803,7 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 
 	for _, id := range req.IDs {
 		var session models.Session
-		query := database.DB.Where("id = ? AND status IN ?", id, []string{models.SessionStatusRunning, models.SessionStatusStarting}).Preload("Host").Preload("User")
+		query := database.DB.Where("id = ? AND status IN ?", id, activeDesktopStatuses()).Preload("Host").Preload("User")
 		if roleStr != "admin" {
 			query = query.Where("user_id = ?", uid)
 		}
@@ -656,31 +812,10 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 			continue
 		}
 
-		display, wsPort := sessionDisplayAndWSPort(session)
-
-		previousStatus := session.Status
-		database.DB.Model(&session).Update("status", models.SessionStatusStopping)
-
-		if h.dispatchTerminateToAgentIfOnline(session, display, wsPort) {
-			decrementHostSessionIfRunning(session.Host, previousStatus)
-			services.RecordAudit(uid, "desktop_close_dispatch", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "batch": true, "via": "agent"}, c.ClientIP())
-			success = append(success, id)
-			continue
-		}
-
-		if !hostSupportsSSH(session.Host) {
-			database.DB.Model(&session).Update("status", previousStatus)
+		if err := h.terminateSession(session, uid, c.ClientIP(), "desktop_close", map[string]interface{}{"batch": true, "admin": roleStr == "admin"}); err != nil {
 			failed = append(failed, id)
 			continue
 		}
-
-		if display > 0 {
-			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
-		}
-
-		database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
-		decrementHostSessionIfRunning(session.Host, previousStatus)
-		services.RecordAudit(uid, "desktop_close", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "batch": true}, c.ClientIP())
 		success = append(success, id)
 	}
 
@@ -690,6 +825,48 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 		"failed":       failed,
 		"successCount": len(success),
 		"failedCount":  len(failed),
+	})
+}
+
+// ForceTerminateAllDesktops 管理员强制关闭所有用户的活动桌面，用于快速释放资源。
+func (h *DesktopHandler) ForceTerminateAllDesktops(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	uid := userID.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
+	if roleStr != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅管理员可以强制关闭全部桌面"})
+		return
+	}
+
+	var sessions []models.Session
+	if err := database.DB.
+		Where("status IN ?", activeDesktopStatuses()).
+		Preload("Host").
+		Preload("User").
+		Order("created_at ASC").
+		Find(&sessions).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询活动桌面失败"})
+		return
+	}
+
+	success := make([]string, 0, len(sessions))
+	failed := make([]map[string]string, 0)
+	for _, session := range sessions {
+		if err := h.terminateSession(session, uid, c.ClientIP(), "desktop_force_close", map[string]interface{}{"force_all": true, "username": session.User.Username}); err != nil {
+			failed = append(failed, map[string]string{"id": session.ID.String(), "error": err.Error()})
+			continue
+		}
+		success = append(success, session.ID.String())
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "强制关闭全部桌面完成",
+		"success":      success,
+		"failed":       failed,
+		"successCount": len(success),
+		"failedCount":  len(failed),
+		"total":        len(sessions),
 	})
 }
 
@@ -858,14 +1035,17 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 	}
 
 	var startCmdTemplate string
+	authFile := fmt.Sprintf("/home/%s/.vnc/rdp-%d.passwd", linuxUser, display)
+	vncOptions = strings.TrimSpace(vncOptions + " -rfbauth " + authFile)
+
 	if vncBackend == "tigervnc" {
 		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -SecurityTypes VncAuth %s >/dev/null 2>&1 && echo success'", linuxUser, vncBin, vncOptions)
 	} else {
 		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -securitytypes None,Vnc %s >/dev/null 2>&1 && echo success'", linuxUser, vncBin, vncOptions)
 	}
 
-	// 设置 VNC 密码（以 root 为目标用户创建）
-	vncPassCmd := fmt.Sprintf("mkdir -p /home/%s/.vnc && echo '%s' | %s -f > /home/%s/.vnc/passwd && chown %s:%s /home/%s/.vnc/passwd && chmod 600 /home/%s/.vnc/passwd", linuxUser, password, vncPassBin, linuxUser, linuxUser, linuxUser, linuxUser, linuxUser)
+	// 每个 display 使用独立 VNC 密码文件，避免同一操作系统用户的多个桌面互相覆盖密码。
+	vncPassCmd := fmt.Sprintf("mkdir -p /home/%s/.vnc && printf %%s %s | HOME=/home/%s %s -f > %s && chown %s:%s %s && chmod 600 %s", linuxUser, shellQuote(password), linuxUser, shellQuote(vncPassBin), shellQuote(authFile), linuxUser, linuxUser, shellQuote(authFile), shellQuote(authFile))
 
 	xstartupCmd := fmt.Sprintf("printf '%%s\n' %s > /home/%s/.vnc/xstartup && chmod 755 /home/%s/.vnc/xstartup && chown %s:%s /home/%s/.vnc/xstartup", shellQuoteArgs(xstartupLines(desktopEnv, performanceProfile)), linuxUser, linuxUser, linuxUser, linuxUser, linuxUser)
 
@@ -903,15 +1083,15 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 	}
 
 	// 启动 websockify（仍以 root 运行，需要监听端口）
-	wsCmd := fmt.Sprintf("nohup websockify --web=/opt/noVNC --cert=/dev/null %d localhost:%d >/dev/null 2>&1 &", wsPort, port)
+	wsCmd := websockifyStartCommand(wsPort, port)
 	session, err = client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建 SSH session 失败: %w", err)
 	}
-	_, err = session.CombinedOutput(wsCmd)
+	output, err = session.CombinedOutput(wsCmd)
 	session.Close()
 	if err != nil {
-		return fmt.Errorf("启动 websockify 失败: %w", err)
+		return fmt.Errorf("启动 websockify 失败: %w, output: %s", err, string(output))
 	}
 
 	return nil
@@ -961,7 +1141,7 @@ func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, li
 	}
 
 	// 停止 websockify
-	killCmd := fmt.Sprintf("pkill -f 'websockify.*%d' >/dev/null 2>&1 || true", wsPort)
+	killCmd := fmt.Sprintf("pkill -f '[w]ebsockify.*%d' >/dev/null 2>&1 || true; rm -f %s >/dev/null 2>&1 || true", wsPort, shellQuote(fmt.Sprintf("/home/%s/.vnc/rdp-%d.passwd", linuxUser, display)))
 	session, err = client.NewSession()
 	if err != nil {
 		result.NonFatalErrors = append(result.NonFatalErrors, fmt.Sprintf("创建 websockify 清理 SSH session 失败: %v", err))
@@ -981,26 +1161,21 @@ func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, li
 func vncPerformanceOptions(vncBackend, profile string) string {
 	switch vncBackend {
 	case "turbovnc":
-		switch profile {
-		case "quality":
-			return "-quality 95 -compresslevel 0"
-		case "low_bandwidth":
-			return "-quality 45 -compresslevel 7"
-		default:
-			return "-quality 75 -compresslevel 3"
-		}
+		return ""
 	case "tigervnc":
-		switch profile {
-		case "quality":
-			return "-QualityLevel 9 -CompressLevel 1"
-		case "low_bandwidth":
-			return "-QualityLevel 4 -CompressLevel 9"
-		default:
-			return "-QualityLevel 7 -CompressLevel 6"
-		}
+		return ""
 	default:
 		return ""
 	}
+}
+
+func websockifyStartCommand(wsPort, vncPort int) string {
+	return fmt.Sprintf(`log=$(mktemp /tmp/websockify-%d.XXXXXX); nohup websockify --web=/opt/noVNC --cert=/dev/null %d localhost:%d >"$log" 2>&1 & check_port() { if command -v ss >/dev/null 2>&1; then ss -ltn | grep -Eq "[:.]%d[[:space:]]"; else netstat -ltn 2>/dev/null | grep -Eq "[:.]%d[[:space:]]"; fi; }; for i in $(seq 1 10); do sleep 1; if check_port; then rm -f "$log"; exit 0; fi; done; cat "$log"; rm -f "$log"; exit 1`,
+		wsPort, wsPort, vncPort, wsPort, wsPort)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func xstartupLines(desktopEnv, profile string) []string {

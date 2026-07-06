@@ -50,10 +50,12 @@ export const hostAPI = {
 export const desktopAPI = {
   list: () => api.get('/desktops'),
   create: (data: any) => api.post('/desktops', data),
+  thumbnail: (id: string) => api.get(`/desktops/${id}/thumbnail`, { responseType: 'blob' }),
   terminate: (id: string) => api.delete(`/desktops/${id}`),
   deleteRecord: (id: string) => api.delete(`/desktops/${id}/record`),
   batchTerminate: (ids: string[]) => api.post('/desktops/batch/terminate', { ids }),
   batchDelete: (ids: string[]) => api.post('/desktops/batch/delete', { ids }),
+  forceTerminateAll: () => api.post('/desktops/admin/terminate-all'),
 };
 
 export const fileAPI = {

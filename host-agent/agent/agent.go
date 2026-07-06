@@ -447,6 +447,16 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 		}
 		if err := a.CreateDesktop(payload); err != nil {
 			log.Printf("创建桌面失败: %v", err)
+			if cleanupErr := a.TerminateDesktop(terminateDesktopPayload{
+				SessionID:  payload.SessionID,
+				Username:   payload.Username,
+				Display:    payload.Display,
+				WSPort:     payload.WSPort,
+				VNCBackend: payload.VNCBackend,
+				Force:      true,
+			}); cleanupErr != nil {
+				log.Printf("创建失败后的残留清理失败 session=%s: %v", payload.SessionID, cleanupErr)
+			}
 			a.sendDesktopUpdate(payload.SessionID, "error", err.Error())
 		} else {
 			a.trackDesktop(payload)

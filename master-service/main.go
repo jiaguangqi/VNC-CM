@@ -74,7 +74,9 @@ func main() {
 		// 桌面会话管理（普通用户）
 		authorized.GET("/desktops", desktopHandler.ListDesktops)
 		authorized.POST("/desktops", desktopHandler.CreateDesktop)
+		authorized.POST("/desktops/admin/terminate-all", desktopHandler.ForceTerminateAllDesktops)
 		authorized.GET("/desktops/:id", desktopHandler.GetDesktopDetail)
+		authorized.GET("/desktops/:id/thumbnail", desktopHandler.GetDesktopThumbnail)
 		authorized.DELETE("/desktops/:id", desktopHandler.CloseDesktop)
 		authorized.DELETE("/desktops/:id/record", desktopHandler.DeleteDesktop)
 		authorized.POST("/desktops/batch/terminate", desktopHandler.BatchTerminateDesktops)
