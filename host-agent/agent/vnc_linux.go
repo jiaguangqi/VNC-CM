@@ -41,8 +41,8 @@ func (a *Agent) createLinuxVNCDesktop(payload createDesktopPayload) error {
 		fmt.Sprintf("install -d -m 700 -o %[1]s -g %[1]s %[2]s", qUser, qVNCDir),
 		fmt.Sprintf("printf %%s %s | %s -f > %s && chown %s:%s %s && chmod 600 %s",
 			shellQuote(payload.Password), shellQuote(vncPassBin), qPasswdPath, qUser, qUser, qPasswdPath, qPasswdPath),
-		fmt.Sprintf("printf '%%s\n' '#!/bin/sh' 'unset SESSION_MANAGER' 'unset DBUS_SESSION_BUS_ADDRESS' %s > %s && chmod 755 %s && chown %s:%s %s",
-			shellQuote("exec "+desktopCmd), qXstartupPath, qXstartupPath, qUser, qUser, qXstartupPath),
+		fmt.Sprintf("printf '%%s\n' %s > %s && chmod 755 %s && chown %s:%s %s",
+			shellQuoteArgs(agentXstartupLines(desktopCmd, payload.PerformanceProfile)), qXstartupPath, qXstartupPath, qUser, qUser, qXstartupPath),
 	}
 
 	for _, command := range commands {
@@ -55,8 +55,8 @@ func (a *Agent) createLinuxVNCDesktop(payload createDesktopPayload) error {
 	if payload.VNCBackend == "turbovnc" {
 		securityTypes = "-securitytypes None,Vnc"
 	}
-	startInner := fmt.Sprintf("%s :%d -geometry %s -depth %d %s >/dev/null 2>&1 && echo success",
-		vncBin, payload.Display, payload.Resolution, colorDepth, securityTypes)
+	startInner := fmt.Sprintf("%s :%d -geometry %s -depth %d %s %s >/dev/null 2>&1 && echo success",
+		vncBin, payload.Display, payload.Resolution, colorDepth, securityTypes, payload.VNCOptions)
 	startCmd := fmt.Sprintf("su - %s -c %s", qUser, shellQuote(startInner))
 	if output, err := runShell(startCmd); err != nil {
 		return fmt.Errorf("启动 vncserver 失败: %w, output: %s", err, output)
@@ -104,4 +104,27 @@ func runShell(command string) (string, error) {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func shellQuoteArgs(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, shellQuote(value))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func agentXstartupLines(desktopCmd, profile string) []string {
+	lines := []string{
+		"#!/bin/sh",
+		"unset SESSION_MANAGER",
+		"unset DBUS_SESSION_BUS_ADDRESS",
+	}
+	if profile == "low_bandwidth" {
+		lines = append(lines,
+			"gsettings set org.gnome.desktop.interface enable-animations false >/dev/null 2>&1 || true",
+			"xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true",
+		)
+	}
+	return append(lines, "exec "+desktopCmd)
 }

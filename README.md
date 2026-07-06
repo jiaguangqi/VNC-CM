@@ -299,6 +299,18 @@ Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockif
 - SSH 回退节点：需要配置 SSH 用户和密码或私钥，Master 会通过 SSH 做端口预检、启动/停止回退和健康检查。
 - Agent 托管节点：勾选 `agent_managed` 后，VNC 启停优先由 Host Agent 在节点本机执行；SSH 凭据可不填写，但 Host Agent 必须在线，用户与桌面组件会在创建桌面时由 Agent 本地校验。
 
+### VNC 性能档位
+
+创建桌面时可以选择 `performance_profile`：
+
+| 档位 | 适用场景 | 默认策略 |
+|------|----------|----------|
+| `quality` | 局域网或高带宽链路 | 1920x1080、24-bit、较高 VNC 画质 |
+| `balanced` | 默认办公场景 | 1920x1080、24-bit、适中压缩 |
+| `low_bandwidth` | 弱网、跨地域、移动网络 | 1280x720、16-bit、优先 XFCE，xstartup 会尝试关闭动画和 XFCE 合成 |
+
+低带宽档位不会强制覆盖用户后续手动选择；如果用户明确改回 GNOME 或更高分辨率，系统会按用户选择创建，但前端会保留带宽影响提示。
+
 ### 数据库模型
 
 核心数据表：

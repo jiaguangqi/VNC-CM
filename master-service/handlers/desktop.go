@@ -35,28 +35,30 @@ func NewDesktopHandler(encryptor *services.EncryptionService, maxDesktopsPerUser
 }
 
 type CreateDesktopRequest struct {
-	DesktopEnv string `json:"desktop_env" binding:"omitempty,oneof=gnome xfce"`
-	Protocol   string `json:"protocol" binding:"required,oneof=vnc rdp spice"`
-	Resolution string `json:"resolution" binding:"required"`
-	ColorDepth int    `json:"color_depth" binding:"omitempty,oneof=8 16 24"`
-	VncBackend string `json:"vnc_backend" binding:"omitempty,oneof=turbovnc tigervnc"`
-	HostID     string `json:"host_id" binding:"omitempty,uuid"`
+	DesktopEnv         string `json:"desktop_env" binding:"omitempty,oneof=gnome xfce"`
+	Protocol           string `json:"protocol" binding:"required,oneof=vnc rdp spice"`
+	Resolution         string `json:"resolution" binding:"required"`
+	ColorDepth         int    `json:"color_depth" binding:"omitempty,oneof=8 16 24"`
+	VncBackend         string `json:"vnc_backend" binding:"omitempty,oneof=turbovnc tigervnc"`
+	PerformanceProfile string `json:"performance_profile" binding:"omitempty,oneof=quality balanced low_bandwidth"`
+	HostID             string `json:"host_id" binding:"omitempty,uuid"`
 }
 
 type DesktopResponse struct {
-	ID             string                 `json:"id"`
-	Protocol       string                 `json:"protocol"`
-	VncBackend     string                 `json:"vnc_backend,omitempty"`
-	Resolution     string                 `json:"resolution"`
-	Status         string                 `json:"status"`
-	Username       string                 `json:"username,omitempty"`
-	HostID         string                 `json:"host_id"`
-	HostIP         string                 `json:"host_ip"`
-	HostName       string                 `json:"host_name"`
-	Port           int                    `json:"port"`
-	VncPassword    string                 `json:"vnc_password,omitempty"`
-	ConnectionInfo map[string]interface{} `json:"connection_info,omitempty"`
-	CreatedAt      time.Time              `json:"created_at"`
+	ID                 string                 `json:"id"`
+	Protocol           string                 `json:"protocol"`
+	VncBackend         string                 `json:"vnc_backend,omitempty"`
+	Resolution         string                 `json:"resolution"`
+	PerformanceProfile string                 `json:"performance_profile,omitempty"`
+	Status             string                 `json:"status"`
+	Username           string                 `json:"username,omitempty"`
+	HostID             string                 `json:"host_id"`
+	HostIP             string                 `json:"host_ip"`
+	HostName           string                 `json:"host_name"`
+	Port               int                    `json:"port"`
+	VncPassword        string                 `json:"vnc_password,omitempty"`
+	ConnectionInfo     map[string]interface{} `json:"connection_info,omitempty"`
+	CreatedAt          time.Time              `json:"created_at"`
 }
 
 func (h *DesktopHandler) ListDesktops(c *gin.Context) {
@@ -86,12 +88,13 @@ func (h *DesktopHandler) ListDesktops(c *gin.Context) {
 	result := make([]DesktopResponse, 0)
 	for _, s := range sessions {
 		dr := DesktopResponse{
-			ID:         s.ID.String(),
-			Protocol:   s.Protocol,
-			Resolution: s.Resolution,
-			Status:     s.Status,
-			HostID:     s.HostID.String(),
-			CreatedAt:  s.CreatedAt,
+			ID:                 s.ID.String(),
+			Protocol:           s.Protocol,
+			Resolution:         s.Resolution,
+			PerformanceProfile: s.PerformanceProfile,
+			Status:             s.Status,
+			HostID:             s.HostID.String(),
+			CreatedAt:          s.CreatedAt,
 		}
 		if roleStr == "admin" && s.User.ID != uuid.Nil {
 			dr.Username = s.User.Username
@@ -133,14 +136,15 @@ func (h *DesktopHandler) GetDesktopDetail(c *gin.Context) {
 	}
 
 	dr := DesktopResponse{
-		ID:         session.ID.String(),
-		Protocol:   session.Protocol,
-		Resolution: session.Resolution,
-		Status:     session.Status,
-		HostID:     session.HostID.String(),
-		HostIP:     session.Host.IPAddress,
-		HostName:   session.Host.Hostname,
-		CreatedAt:  session.CreatedAt,
+		ID:                 session.ID.String(),
+		Protocol:           session.Protocol,
+		Resolution:         session.Resolution,
+		PerformanceProfile: session.PerformanceProfile,
+		Status:             session.Status,
+		HostID:             session.HostID.String(),
+		HostIP:             session.Host.IPAddress,
+		HostName:           session.Host.Hostname,
+		CreatedAt:          session.CreatedAt,
 	}
 
 	if session.ConnectionInfo != "" {
@@ -273,6 +277,14 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	if colorDepth == 0 {
 		colorDepth = 24
 	}
+	performanceProfile := req.PerformanceProfile
+	if performanceProfile == "" {
+		performanceProfile = "balanced"
+	}
+	if performanceProfile == "low_bandwidth" && req.DesktopEnv == "" {
+		desktopEnv = "xfce"
+	}
+	vncOptions := vncPerformanceOptions(vncBackend, performanceProfile)
 
 	uidUUID, _ := uuid.Parse(uid)
 	connInfo := map[string]interface{}{
@@ -286,14 +298,15 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	connInfoJSON, _ := json.Marshal(connInfo)
 
 	session := models.Session{
-		UserID:         uidUUID,
-		HostID:         host.ID,
-		Protocol:       req.Protocol,
-		VncBackend:     vncBackend,
-		Resolution:     req.Resolution,
-		ColorDepth:     colorDepth,
-		Status:         models.SessionStatusStarting,
-		ConnectionInfo: string(connInfoJSON),
+		UserID:             uidUUID,
+		HostID:             host.ID,
+		Protocol:           req.Protocol,
+		VncBackend:         vncBackend,
+		Resolution:         req.Resolution,
+		ColorDepth:         colorDepth,
+		PerformanceProfile: performanceProfile,
+		Status:             models.SessionStatusStarting,
+		ConnectionInfo:     string(connInfoJSON),
 	}
 
 	if err := database.DB.Create(&session).Error; err != nil {
@@ -301,7 +314,7 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		return
 	}
 
-	if h.dispatchCreateToAgentIfOnline(host, session, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend) {
+	if h.dispatchCreateToAgentIfOnline(host, session, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend, vncOptions) {
 		services.RecordAudit(uid, "desktop_create_dispatch", "session", session.ID.String(), map[string]interface{}{
 			"host_id":   host.ID.String(),
 			"host_name": host.Hostname,
@@ -311,23 +324,24 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 			"via":       "agent",
 		}, c.ClientIP())
 		c.JSON(http.StatusCreated, DesktopResponse{
-			ID:             session.ID.String(),
-			Protocol:       session.Protocol,
-			VncBackend:     session.VncBackend,
-			Resolution:     session.Resolution,
-			Status:         session.Status,
-			HostID:         host.ID.String(),
-			HostIP:         host.IPAddress,
-			HostName:       host.Hostname,
-			Port:           port,
-			VncPassword:    vncPassword,
-			ConnectionInfo: connInfo,
-			CreatedAt:      session.CreatedAt,
+			ID:                 session.ID.String(),
+			Protocol:           session.Protocol,
+			VncBackend:         session.VncBackend,
+			Resolution:         session.Resolution,
+			PerformanceProfile: session.PerformanceProfile,
+			Status:             session.Status,
+			HostID:             host.ID.String(),
+			HostIP:             host.IPAddress,
+			HostName:           host.Hostname,
+			Port:               port,
+			VncPassword:        vncPassword,
+			ConnectionInfo:     connInfo,
+			CreatedAt:          session.CreatedAt,
 		})
 		return
 	}
 
-	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend); err != nil {
+	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend, vncOptions, performanceProfile); err != nil {
 		connInfo["error"] = err.Error()
 		errorConnInfoJSON, _ := json.Marshal(connInfo)
 		database.DB.Model(&session).Updates(map[string]interface{}{
@@ -355,21 +369,23 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		"ws_port":    wsPort,
 		"protocol":   session.Protocol,
 		"resolution": session.Resolution,
+		"profile":    session.PerformanceProfile,
 	}, c.ClientIP())
 
 	c.JSON(http.StatusCreated, DesktopResponse{
-		ID:             session.ID.String(),
-		Protocol:       session.Protocol,
-		VncBackend:     session.VncBackend,
-		Resolution:     session.Resolution,
-		Status:         session.Status,
-		HostID:         host.ID.String(),
-		HostIP:         host.IPAddress,
-		HostName:       host.Hostname,
-		Port:           port,
-		VncPassword:    vncPassword,
-		ConnectionInfo: connInfo,
-		CreatedAt:      session.CreatedAt,
+		ID:                 session.ID.String(),
+		Protocol:           session.Protocol,
+		VncBackend:         session.VncBackend,
+		Resolution:         session.Resolution,
+		PerformanceProfile: session.PerformanceProfile,
+		Status:             session.Status,
+		HostID:             host.ID.String(),
+		HostIP:             host.IPAddress,
+		HostName:           host.Hostname,
+		Port:               port,
+		VncPassword:        vncPassword,
+		ConnectionInfo:     connInfo,
+		CreatedAt:          session.CreatedAt,
 	})
 }
 
@@ -420,23 +436,25 @@ func (h *DesktopHandler) isHostAgentOnline(host models.Host) bool {
 	return h.agentServer != nil && h.agentServer.IsHostOnline(host.ID.String())
 }
 
-func (h *DesktopHandler) dispatchCreateToAgentIfOnline(host models.Host, session models.Session, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) bool {
+func (h *DesktopHandler) dispatchCreateToAgentIfOnline(host models.Host, session models.Session, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend, vncOptions string) bool {
 	if !h.isHostAgentOnline(host) {
 		return false
 	}
 
 	payload := map[string]interface{}{
-		"session_id":  session.ID.String(),
-		"username":    linuxUser,
-		"protocol":    session.Protocol,
-		"resolution":  resolution,
-		"color_depth": colorDepth,
-		"display":     display,
-		"port":        port,
-		"ws_port":     wsPort,
-		"password":    password,
-		"desktop_env": desktopEnv,
-		"vnc_backend": vncBackend,
+		"session_id":          session.ID.String(),
+		"username":            linuxUser,
+		"protocol":            session.Protocol,
+		"resolution":          resolution,
+		"color_depth":         colorDepth,
+		"display":             display,
+		"port":                port,
+		"ws_port":             wsPort,
+		"password":            password,
+		"desktop_env":         desktopEnv,
+		"vnc_backend":         vncBackend,
+		"performance_profile": session.PerformanceProfile,
+		"vnc_options":         vncOptions,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -799,7 +817,7 @@ func (h *DesktopHandler) dialHostSSH(host models.Host) (*ssh.Client, error) {
 }
 
 // startVNCOnHost 在宿主机上启动 VNC 会话（以 linuxUser 身份运行）
-func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) error {
+func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend, vncOptions, performanceProfile string) error {
 	client, err := h.dialHostSSH(host)
 	if err != nil {
 		return err
@@ -832,24 +850,15 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 
 	var startCmdTemplate string
 	if vncBackend == "tigervnc" {
-		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -SecurityTypes VncAuth >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
+		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -SecurityTypes VncAuth %s >/dev/null 2>&1 && echo success'", linuxUser, vncBin, vncOptions)
 	} else {
-		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -securitytypes None,Vnc >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
+		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -securitytypes None,Vnc %s >/dev/null 2>&1 && echo success'", linuxUser, vncBin, vncOptions)
 	}
 
 	// 设置 VNC 密码（以 root 为目标用户创建）
 	vncPassCmd := fmt.Sprintf("mkdir -p /home/%s/.vnc && echo '%s' | %s -f > /home/%s/.vnc/passwd && chown %s:%s /home/%s/.vnc/passwd && chmod 600 /home/%s/.vnc/passwd", linuxUser, password, vncPassBin, linuxUser, linuxUser, linuxUser, linuxUser, linuxUser)
 
-	// 创建 xstartup 桌面环境启动脚本（使用 printf 避免 SSH heredoc 问题）
-	var sessionCmd string
-	switch desktopEnv {
-	case "xfce":
-		sessionCmd = "startxfce4"
-	default:
-		// GNOME
-		sessionCmd = "gnome-session"
-	}
-	xstartupCmd := fmt.Sprintf("printf '%%s\n' '#!/bin/sh' 'unset SESSION_MANAGER' 'unset DBUS_SESSION_BUS_ADDRESS' 'exec %s' > /home/%s/.vnc/xstartup && chmod 755 /home/%s/.vnc/xstartup && chown %s:%s /home/%s/.vnc/xstartup", sessionCmd, linuxUser, linuxUser, linuxUser, linuxUser, linuxUser)
+	xstartupCmd := fmt.Sprintf("printf '%%s\n' %s > /home/%s/.vnc/xstartup && chmod 755 /home/%s/.vnc/xstartup && chown %s:%s /home/%s/.vnc/xstartup", shellQuoteArgs(xstartupLines(desktopEnv, performanceProfile)), linuxUser, linuxUser, linuxUser, linuxUser, linuxUser)
 
 	session, err = client.NewSession()
 	if err != nil {
@@ -958,6 +967,57 @@ func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, li
 	session.Close()
 
 	return result, nil
+}
+
+func vncPerformanceOptions(vncBackend, profile string) string {
+	switch vncBackend {
+	case "turbovnc":
+		switch profile {
+		case "quality":
+			return "-quality 95 -compresslevel 0"
+		case "low_bandwidth":
+			return "-quality 45 -compresslevel 7"
+		default:
+			return "-quality 75 -compresslevel 3"
+		}
+	case "tigervnc":
+		switch profile {
+		case "quality":
+			return "-QualityLevel 9 -CompressLevel 1"
+		case "low_bandwidth":
+			return "-QualityLevel 4 -CompressLevel 9"
+		default:
+			return "-QualityLevel 7 -CompressLevel 6"
+		}
+	default:
+		return ""
+	}
+}
+
+func xstartupLines(desktopEnv, profile string) []string {
+	lines := []string{
+		"#!/bin/sh",
+		"unset SESSION_MANAGER",
+		"unset DBUS_SESSION_BUS_ADDRESS",
+	}
+	if profile == "low_bandwidth" {
+		lines = append(lines,
+			"gsettings set org.gnome.desktop.interface enable-animations false >/dev/null 2>&1 || true",
+			"xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true",
+		)
+	}
+	if desktopEnv == "xfce" {
+		return append(lines, "exec startxfce4")
+	}
+	return append(lines, "exec gnome-session")
+}
+
+func shellQuoteArgs(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, "'"+strings.ReplaceAll(value, "'", "'\"'\"'")+"'")
+	}
+	return strings.Join(quoted, " ")
 }
 
 func generateRandomPassword(length int) string {

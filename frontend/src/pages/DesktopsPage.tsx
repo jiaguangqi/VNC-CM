@@ -52,6 +52,7 @@ interface DesktopSession {
   id: string;
   protocol: string;
   resolution: string;
+  performance_profile?: string;
   status: string;
   username?: string;
   host_id: string;
@@ -300,6 +301,7 @@ const fetchDesktops = async () => {
         color_depth: values.color_depth || 24,
         desktop_env: values.desktop_env,
         vnc_backend: values.protocol === "vnc" ? (values.vnc_backend || "turbovnc") : undefined,
+        performance_profile: values.performance_profile || "balanced",
         host_id: values.host_id === "auto" ? undefined : values.host_id,
       });
       message.success(
@@ -377,6 +379,14 @@ const fetchDesktops = async () => {
       case "terminated": return "已关闭";
       case "error": return "异常";
       default: return s;
+    }
+  };
+
+  const profileText = (profile?: string) => {
+    switch (profile) {
+      case "quality": return "画质优先";
+      case "low_bandwidth": return "低带宽";
+      default: return "均衡";
     }
   };
 
@@ -668,6 +678,7 @@ const fetchDesktops = async () => {
           <div style={cardMetaStyle}>
             <div><Text type="secondary">协议:</Text> {desktop.protocol.toUpperCase()}</div>
             <div><Text type="secondary">分辨率:</Text> {desktop.resolution}</div>
+            <div><Text type="secondary">档位:</Text> {profileText(desktop.performance_profile)}</div>
             <div><Text type="secondary">端口:</Text> {desktop.port}</div>
             <div><Text type="secondary">IP:</Text> <span style={{ overflowWrap: "anywhere" }}>{desktop.host_ip}</span></div>
           </div>
@@ -1052,6 +1063,21 @@ const fetchDesktops = async () => {
             <Select>
               <Select.Option value="gnome">GNOME</Select.Option>
               <Select.Option value="xfce">XFCE</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="performance_profile" label="性能档位" initialValue="balanced" rules={[{ required: true }]}>
+            <Select
+              onChange={(value) => {
+                if (value === "low_bandwidth") {
+                  form.setFieldsValue({ resolution: "1280x720", color_depth: 16, desktop_env: "xfce" });
+                } else if (value === "quality") {
+                  form.setFieldsValue({ resolution: "1920x1080", color_depth: 24 });
+                }
+              }}
+            >
+              <Select.Option value="quality">画质优先</Select.Option>
+              <Select.Option value="balanced">均衡</Select.Option>
+              <Select.Option value="low_bandwidth">低带宽</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="protocol" label="协议类型" initialValue="vnc" rules={[{ required: true }]}>

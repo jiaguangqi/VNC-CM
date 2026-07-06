@@ -80,20 +80,22 @@ type masterInstruction struct {
 }
 
 type createDesktopPayload struct {
-	SessionID         string `json:"session_id"`
-	Username          string `json:"username"`
-	Protocol          string `json:"protocol"`
-	Resolution        string `json:"resolution"`
-	ColorDepth        int    `json:"color_depth"`
-	Display           int    `json:"display"`
-	Port              int    `json:"port"`
-	WSPort            int    `json:"ws_port"`
-	Password          string `json:"password"`
-	DesktopEnv        string `json:"desktop_env"`
-	VNCBackend        string `json:"vnc_backend"`
-	TimeoutMinutes    int    `json:"timeout_minutes"`
-	RequireGPU        bool   `json:"require_gpu"`
-	RequestedGPUCount int    `json:"requested_gpu_count"`
+	SessionID          string `json:"session_id"`
+	Username           string `json:"username"`
+	Protocol           string `json:"protocol"`
+	Resolution         string `json:"resolution"`
+	ColorDepth         int    `json:"color_depth"`
+	Display            int    `json:"display"`
+	Port               int    `json:"port"`
+	WSPort             int    `json:"ws_port"`
+	Password           string `json:"password"`
+	DesktopEnv         string `json:"desktop_env"`
+	VNCBackend         string `json:"vnc_backend"`
+	PerformanceProfile string `json:"performance_profile"`
+	VNCOptions         string `json:"vnc_options"`
+	TimeoutMinutes     int    `json:"timeout_minutes"`
+	RequireGPU         bool   `json:"require_gpu"`
+	RequestedGPUCount  int    `json:"requested_gpu_count"`
 }
 
 type terminateDesktopPayload struct {
