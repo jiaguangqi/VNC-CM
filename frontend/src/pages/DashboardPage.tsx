@@ -15,6 +15,14 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [trendData, setTrendData] = useState<any[]>([]);
+  const [topBandwidth, setTopBandwidth] = useState<any[]>([]);
+
+  const formatBandwidth = (bps?: number) => {
+    if (!bps || bps <= 0) return "0 bps";
+    if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+    if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`;
+    return `${Math.round(bps)} bps`;
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -32,6 +40,7 @@ export default function DashboardPage() {
             hosts: overview.total_hosts || 0,
             users: overview.active_users || 0,
           });
+          setTopBandwidth(overview.top_bandwidth_sessions || []);
         }
         if (trend?.data) {
           setTrendData(trend.data);
@@ -208,6 +217,31 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div style={{color:"#86909c",fontSize:12,whiteSpace:"nowrap"}}>{notice.time}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="rdp-table-card">
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div>
+              <h3 className="rdp-section-title">带宽 Top 会话</h3>
+              <div className="rdp-section-subtitle">来自 Host Agent 可识别的 VNC Web 连接</div>
+            </div>
+            <Tag color="purple">{topBandwidth.length}</Tag>
+          </div>
+          <div className="rdp-notice-list">
+            {topBandwidth.length === 0 ? (
+              <div style={{color:"#86909c",fontSize:13}}>暂无带宽样本</div>
+            ) : topBandwidth.map((item: any) => (
+              <div key={item.id} className="rdp-notice-item">
+                <div>
+                  <div style={{fontWeight:600,color:"#1d2129"}}>{item.host_name || "未知节点"} · {item.username || "未知用户"}</div>
+                  <div style={{marginTop:4,color:"#86909c",fontSize:12}}>峰值 {formatBandwidth(item.peak_bandwidth_bps)}</div>
+                </div>
+                <Tag color={(item.current_bandwidth_bps || 0) > 5_000_000 ? "red" : "blue"}>
+                  {formatBandwidth(item.current_bandwidth_bps)}
+                </Tag>
               </div>
             ))}
           </div>

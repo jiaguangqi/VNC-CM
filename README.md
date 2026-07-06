@@ -164,6 +164,9 @@ PROTOCOL_GATEWAY_PORT=8083
 # 操作系统用户认证（Docker Compose 默认挂载 /etc/shadow 到该路径）
 SYSTEM_SHADOW_FILE=/host/etc/shadow
 
+# 用户配额
+MAX_DESKTOPS_PER_USER=5
+
 # 前端 API 地址
 VITE_API_BASE_URL=http://localhost:8080/api/v1
 ```
@@ -188,6 +191,9 @@ docker compose up -d frontend
 # 5. 查看服务状态
 docker compose ps
 docker compose logs -f master-service
+
+# 6. 运行部署自检
+./install.sh selfcheck
 ```
 
 ### 生产环境部署建议
@@ -260,11 +266,52 @@ Master Service 提供 RESTful API，主要接口：
 | `/api/v1/desktops` | GET | 获取桌面实例列表 |
 | `/api/v1/desktops` | POST | 创建桌面实例 |
 | `/api/v1/desktop-hosts` | GET | 获取可运行桌面的节点列表 |
+| `/api/v1/hosts/:id/readiness` | GET | 获取节点就绪诊断（管理员） |
 | `/api/v1/files/upload` | POST | 文件上传 |
 | `/api/v1/files/download` | GET | 文件下载 |
 | `/health` | GET | 服务健康检查 |
 
 完整 API 文档可通过源码中的 `handlers/` 目录查看，或使用工具（如 Swagger）生成。
+
+### 桌面生命周期状态
+
+桌面会话使用以下状态流转，便于前端展示、运维排障和后续健康检查：
+
+| 状态 | 说明 |
+|------|------|
+| `pending` | 已登记但尚未开始处理 |
+| `starting` | 正在启动 VNC 和 Web 访问代理 |
+| `running` | VNC 桌面已启动，可连接 |
+| `stopping` | 正在关闭并清理远端进程 |
+| `terminated` | 已关闭，可删除历史记录 |
+| `error` | 启动或运行异常，错误信息记录在 `connection_info` 中 |
+
+Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockify 监听端口；如果远端进程不存在或端口不可用，会将会话标记为 `error` 并释放节点会话计数。
+
+创建桌面时，系统会在目标节点上分配最低可用 VNC display，并在启动前检查对应的 VNC 端口和 websockify 端口是否空闲；如果端口已被占用，会自动尝试下一个可用 display。
+
+节点列表会检查 SSH、当前用户、VNC 工具、websockify、noVNC 和桌面环境；用户申请桌面时，未就绪节点或缺少当前系统用户的节点会被禁用。
+
+管理员可以为节点配置 `allowed_users` 和 `allowed_roles` 访问策略，使用英文逗号分隔；两者都为空表示该节点不限制用户或角色。
+
+节点支持两种管理方式：
+
+- SSH 回退节点：需要配置 SSH 用户和密码或私钥，Master 会通过 SSH 做端口预检、启动/停止回退和健康检查。
+- Agent 托管节点：勾选 `agent_managed` 后，VNC 启停优先由 Host Agent 在节点本机执行；SSH 凭据可不填写，但 Host Agent 必须在线，用户与桌面组件会在创建桌面时由 Agent 本地校验。
+
+### VNC 性能档位
+
+创建桌面时可以选择 `performance_profile`：
+
+| 档位 | 适用场景 | 默认策略 |
+|------|----------|----------|
+| `quality` | 局域网或高带宽链路 | 1920x1080、24-bit、较高 VNC 画质 |
+| `balanced` | 默认办公场景 | 1920x1080、24-bit、适中压缩 |
+| `low_bandwidth` | 弱网、跨地域、移动网络 | 1280x720、16-bit、优先 XFCE，xstartup 会尝试关闭动画和 XFCE 合成 |
+
+低带宽档位不会强制覆盖用户后续手动选择；如果用户明确改回 GNOME 或更高分辨率，系统会按用户选择创建，但前端会保留带宽影响提示。
+
+Host Agent 会对自己启动的 VNC 会话按 websockify 端口采样 socket 字节，Master 会记录当前带宽、峰值带宽和累计网络字节，并在桌面列表与仪表盘 Top 会话中展示。该指标是 Agent 可识别路径下的 best-effort 观测；SSH 回退启动且无法安全归属端口的会话不会伪造带宽数据。
 
 ### 数据库模型
 
@@ -276,6 +323,7 @@ Master Service 提供 RESTful API，主要接口：
 - `credentials` — 加密存储的登录凭证
 - `sessions` — 用户会话与协同会话
 - `file_transfers` — 文件传输记录
+- `audit_logs` — 登录、桌面、节点和协作等关键操作审计记录
 
 ---
 
@@ -363,6 +411,7 @@ Master Service 通过环境变量进行配置，支持以下配置项：
 | `CREDENTIAL_MASTER_KEY` | — | ✅ | AES 加密主密钥（32 字节） |
 | `HTTP_PORT` | `8080` | — | HTTP 服务端口 |
 | `SYSTEM_SHADOW_FILE` | `/etc/shadow` | — | 操作系统用户认证读取的 shadow 文件路径 |
+| `MAX_DESKTOPS_PER_USER` | `5` | — | 单个用户允许同时处于 starting/running 的最大桌面数，设为 0 表示不限制 |
 
 ### Host Agent 配置
 

@@ -5,6 +5,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/remote-desktop/master-service/config"
@@ -30,9 +31,9 @@ func main() {
 		log.Fatalf("加密服务初始化失败: %v", err)
 	}
 
-	// 初始化调度器
-	scheduler := services.NewScheduler()
-	_ = scheduler // 后续 will be used
+	// 初始化桌面健康监控
+	desktopHealthMonitor := services.NewDesktopHealthMonitor(encryptor, time.Minute)
+	desktopHealthMonitor.Start()
 
 	// 初始化 WebSocket Agent Server
 	agentServer := grpc.NewHostAgentServer()
@@ -43,7 +44,7 @@ func main() {
 	// 初始化处理器
 	authHandler := handlers.NewAuthHandler(jwtMiddleware)
 	hostHandler := handlers.NewHostHandler(encryptor)
-	desktopHandler := handlers.NewDesktopHandler(encryptor)
+	desktopHandler := handlers.NewDesktopHandler(encryptor, cfg.Desktop.MaxDesktopsPerUser, agentServer)
 	statsHandler := handlers.NewStatsHandler()
 
 	// 初始化 Gin 路由
@@ -73,7 +74,9 @@ func main() {
 		// 桌面会话管理（普通用户）
 		authorized.GET("/desktops", desktopHandler.ListDesktops)
 		authorized.POST("/desktops", desktopHandler.CreateDesktop)
+		authorized.POST("/desktops/admin/terminate-all", desktopHandler.ForceTerminateAllDesktops)
 		authorized.GET("/desktops/:id", desktopHandler.GetDesktopDetail)
+		authorized.GET("/desktops/:id/thumbnail", desktopHandler.GetDesktopThumbnail)
 		authorized.DELETE("/desktops/:id", desktopHandler.CloseDesktop)
 		authorized.DELETE("/desktops/:id/record", desktopHandler.DeleteDesktop)
 		authorized.POST("/desktops/batch/terminate", desktopHandler.BatchTerminateDesktops)
@@ -105,6 +108,7 @@ func main() {
 			admin.POST("/hosts", hostHandler.CreateHost)
 			admin.GET("/hosts", hostHandler.ListHosts)
 			admin.GET("/hosts/:id", hostHandler.GetHost)
+			admin.GET("/hosts/:id/readiness", hostHandler.GetHostReadiness)
 			admin.PATCH("/hosts/:id", hostHandler.UpdateHost)
 			admin.DELETE("/hosts/:id", hostHandler.DeleteHost)
 		}

@@ -148,6 +148,9 @@ PROTOCOL_GATEWAY_PORT=8083
 # 操作系统用户认证（容器内读取的 shadow 文件路径）
 SYSTEM_SHADOW_FILE=/host/etc/shadow
 
+# 用户配额
+MAX_DESKTOPS_PER_USER=5
+
 # 前端 API 地址
 VITE_API_BASE_URL=http://localhost:8080/api/v1
 ENV_EOF
@@ -305,6 +308,20 @@ build_server_local() {
     success "Master Service 本地编译完成: ./dist/master-service"
 }
 
+run_selfcheck() {
+    info "========================================"
+    info "运行部署自检..."
+    info "========================================"
+
+    if ! command_exists go; then
+        error "自检需要 Go 环境，请先安装 Go 1.22+"
+    fi
+
+    cd "$SERVER_DIR"
+    go run ./cmd/selfcheck
+    cd ..
+}
+
 # 显示部署结果
 show_result() {
     info "========================================"
@@ -341,7 +358,8 @@ show_menu() {
     echo "  2) 编译宿主机代理 (Host Agent)"
     echo "  3) 部署宿主机代理到本机"
     echo "  4) 编译服务端 (本地开发)"
-    echo "  5) 一键全部 (服务端 + 编译 Agent)"
+    echo "  5) 部署自检"
+    echo "  6) 一键全部 (服务端 + 编译 Agent)"
     echo "  0) 退出"
     echo ""
 }
@@ -371,10 +389,15 @@ main() {
         exit 0
     fi
 
+    if [ "$1" = "selfcheck" ]; then
+        run_selfcheck
+        exit 0
+    fi
+
     # 交互式菜单
     while true; do
         show_menu
-        read -rp "请输入选项 [0-5]: " choice
+        read -rp "请输入选项 [0-6]: " choice
         case $choice in
             1)
                 deploy_server
@@ -390,6 +413,9 @@ main() {
                 build_server_local
                 ;;
             5)
+                run_selfcheck
+                ;;
+            6)
                 deploy_server
                 build_agent
                 show_result
@@ -415,6 +441,7 @@ case "${1:-}" in
         echo "  all         一键部署服务端并编译所有 Agent"
         echo "  server      仅部署服务端"
         echo "  agent       仅编译并部署 Agent"
+        echo "  selfcheck   运行部署自检"
         echo "  -h, --help  显示帮助"
         echo ""
         exit 0

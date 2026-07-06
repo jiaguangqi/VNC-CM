@@ -17,6 +17,7 @@ import {
   Col,
   Checkbox,
   Tooltip,
+  Alert,
 } from "antd";
 import {
   PlusOutlined,
@@ -34,6 +35,9 @@ import {
   CheckSquareOutlined,
   CloseSquareOutlined,
   LogoutOutlined,
+  CopyOutlined,
+  FullscreenOutlined,
+  ReloadOutlined,
 } from "@ant-design/icons";
 import { desktopAPI, collaborationAPI, hostAPI } from "../api";
 import FileTransferModal from "../components/FileTransferModal";
@@ -46,8 +50,14 @@ const { TabPane } = Tabs;
 
 interface DesktopSession {
   id: string;
+  display_name?: string;
+  purpose?: string;
   protocol: string;
   resolution: string;
+  performance_profile?: string;
+  current_bandwidth_bps?: number;
+  peak_bandwidth_bps?: number;
+  total_network_bytes?: number;
   status: string;
   username?: string;
   host_id: string;
@@ -62,8 +72,11 @@ interface DesktopSession {
     password: string;
     port: number;
     display: number;
+    error?: string;
+    last_health_check_at?: string;
   };
   created_at: string;
+  updated_at?: string;
 }
 
 interface HostOption {
@@ -73,9 +86,371 @@ interface HostOption {
   status: string;
   current_sessions: number;
   max_sessions: number;
+  region?: string;
+  az?: string;
+  cpu_cores?: number;
+  total_ram_mb?: number;
+  ready: boolean;
+  current_user_exists: boolean;
+  agent_managed?: boolean;
+  missing?: string[];
 }
 
 type ViewMode = "list" | "grid";
+
+const isProcessingStatus = (status: string) => ["pending", "starting", "stopping"].includes(status);
+const canConnectDesktop = (status: string) => status === "running";
+const canInviteDesktop = (status: string) => status === "running";
+const canStopDesktop = (status: string) => !["terminated", "stopping"].includes(status);
+const canBatchTerminateDesktop = (status: string) => ["pending", "starting", "running", "stopping", "error"].includes(status);
+
+const formatCardBandwidth = (bps?: number) => {
+  if (!bps || bps <= 0) return "0 bps";
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+  if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`;
+  return `${Math.round(bps)} bps`;
+};
+
+const desktopStatusColor = (s: string) => {
+  switch (s) {
+    case "running": return "green";
+    case "starting": return "blue";
+    case "pending": return "gold";
+    case "stopping": return "orange";
+    case "terminated": return "default";
+    case "error": return "red";
+    default: return "default";
+  }
+};
+
+const desktopStatusText = (s: string) => {
+  switch (s) {
+    case "running": return "运行中";
+    case "starting": return "启动中";
+    case "pending": return "等待中";
+    case "stopping": return "关闭中";
+    case "terminated": return "已关闭";
+    case "error": return "异常";
+    default: return s;
+  }
+};
+
+const desktopProfileText = (profile?: string) => {
+  switch (profile) {
+    case "quality": return "画质优先";
+    case "low_bandwidth": return "低带宽";
+    case "balanced":
+    default:
+      return "均衡";
+  }
+};
+
+const cardShellStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "flex-start",
+  gap: 14,
+};
+
+const cardMetaStyle: React.CSSProperties = {
+  flex: "1 1 220px",
+  minWidth: 0,
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(108px, 1fr))",
+  gap: "8px 14px",
+  fontSize: 11.5,
+  color: "#4e5969",
+  lineHeight: 1.7,
+};
+
+const cardActionStyle: React.CSSProperties = {
+  flex: "0 1 152px",
+  minWidth: 126,
+  marginLeft: "auto",
+};
+
+const thumbnailFrameStyle: React.CSSProperties = {
+  width: "100%",
+  aspectRatio: "16 / 9",
+  borderRadius: 8,
+  overflow: "hidden",
+  border: "4px solid #ffffff",
+  boxSizing: "border-box",
+  background: "#0b1220",
+  marginBottom: 12,
+  position: "relative",
+  zIndex: 1,
+  cursor: "zoom-in",
+  transformOrigin: "center center",
+  transition: "transform 180ms ease, box-shadow 180ms ease, outline-color 180ms ease",
+  outline: "1px solid #dbe7f3",
+  boxShadow: "0 8px 22px rgba(15, 23, 42, 0.10)",
+  willChange: "transform",
+};
+
+const thumbnailImageStyle: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  display: "block",
+};
+
+const thumbnailPlaceholderStyle: React.CSSProperties = {
+  width: "100%",
+  height: "100%",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+};
+
+const thumbnailCache = new Map<string, { src?: string; failed?: boolean; promise?: Promise<string> }>();
+
+const DesktopThumbnail = ({ desktop }: { desktop: DesktopSession }) => {
+  const [src, setSrc] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc("");
+    setFailed(false);
+    if (desktop.status !== "running") {
+      return undefined;
+    }
+
+    const cached = thumbnailCache.get(desktop.id);
+    if (cached?.src) {
+      setSrc(cached.src);
+      return undefined;
+    }
+    if (cached?.failed) {
+      setFailed(true);
+      return undefined;
+    }
+
+    const promise = cached?.promise || desktopAPI.thumbnail(desktop.id).then((res) => {
+      const objectUrl = URL.createObjectURL(res.data);
+      thumbnailCache.set(desktop.id, { src: objectUrl });
+      return objectUrl;
+    }).catch((error) => {
+      thumbnailCache.set(desktop.id, { failed: true });
+      throw error;
+    });
+    if (!cached?.promise) {
+      thumbnailCache.set(desktop.id, { promise });
+    }
+
+    promise.then((objectUrl) => {
+        if (cancelled) return;
+        setSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktop.id, desktop.status]);
+
+  const thumb = src ? (
+    <img src={src} alt="桌面缩略图" style={thumbnailImageStyle} />
+  ) : (
+    <div style={thumbnailPlaceholderStyle}>
+      <LinuxOutlined style={{ fontSize: 24, color: failed ? "#ff4d4f" : "#8c8c8c" }} />
+      <Text type={failed ? "danger" : "secondary"} style={{ fontSize: 11 }}>
+        {failed ? "缩略图不可用" : desktop.status === "running" ? "正在获取缩略图" : "桌面未运行"}
+      </Text>
+    </div>
+  );
+
+  const frameStyle: React.CSSProperties = src && hovered ? {
+    ...thumbnailFrameStyle,
+    zIndex: 30,
+    transform: "translate3d(0, -18px, 0) scale(1.42)",
+    outlineColor: "#ffffff",
+    boxShadow: "0 24px 60px rgba(15, 23, 42, 0.30), 0 8px 20px rgba(22, 119, 255, 0.16)",
+  } : thumbnailFrameStyle;
+
+  return (
+    <div
+      style={frameStyle}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {thumb}
+    </div>
+  );
+};
+
+interface DesktopCardProps {
+  desktop: DesktopSession;
+  selected: boolean;
+  runtime: string;
+  sentInvites: any[];
+  onSelectedChange: (checked: boolean) => void;
+  onConnect: () => void;
+  onTerminate: () => void;
+  onInvite: () => void;
+  onOpenFileTransfer: () => void;
+  onStopInvite: (inviteID: string) => void;
+  onDelete: () => void;
+}
+
+const DesktopCard = ({
+  desktop,
+  selected,
+  runtime,
+  sentInvites,
+  onSelectedChange,
+  onConnect,
+  onTerminate,
+  onInvite,
+  onOpenFileTransfer,
+  onStopInvite,
+  onDelete,
+}: DesktopCardProps) => {
+  const isRunning = desktop.status === "running";
+  const isTerminated = desktop.status === "terminated";
+  const canStop = canStopDesktop(desktop.status);
+  const isWindows = desktop.host_os?.toLowerCase().includes("win");
+  const title = desktop.display_name || desktop.host_name;
+  const activeInvites = sentInvites.filter(inv => inv.session_id === desktop.id && inv.status === "active");
+
+  return (
+    <Card
+      hoverable
+      className="rdp-soft-card"
+      style={{
+        position: "relative",
+        overflow: "visible",
+      }}
+      bodyStyle={{ padding: "14px 14px 12px" }}
+    >
+      <DesktopThumbnail desktop={desktop} />
+      <div style={cardShellStyle}>
+        <div style={{ flex: "0 0 auto", alignSelf: "center", paddingRight: 4 }}>
+          <Checkbox checked={selected} onChange={(e) => onSelectedChange(e.target.checked)} />
+        </div>
+
+        <div style={{ flex: "0 1 120px", minWidth: 96, textAlign: "center" }}>
+          <div style={{ marginBottom: 4 }}>
+            {isWindows ? (
+              <WindowsOutlined style={{ fontSize: 28, color: "#1890ff" }} />
+            ) : (
+              <LinuxOutlined style={{ fontSize: 28, color: "#52c41a" }} />
+            )}
+          </div>
+          <Text strong style={{ fontSize: 14, display: "block", overflowWrap: "anywhere" }}>
+            {title}
+          </Text>
+          {desktop.display_name && (
+            <Text type="secondary" style={{ fontSize: 11, display: "block", overflowWrap: "anywhere" }}>
+              {desktop.host_name}
+            </Text>
+          )}
+          <Tag color={desktopStatusColor(desktop.status)} style={{ marginTop: 6, fontSize: 10, height: "auto", lineHeight: 1.4 }}>
+            {desktopStatusText(desktop.status)}
+          </Tag>
+          {desktop.status === "error" && desktop.connection_info?.error && (
+            <div style={{ marginTop: 6 }}>
+              <Text type="danger" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+                {desktop.connection_info.error}
+              </Text>
+            </div>
+          )}
+          {desktop.username && (
+            <div style={{ marginTop: 4 }}>
+              <Text type="secondary" style={{ fontSize: 11, overflowWrap: "anywhere" }}>{desktop.username}</Text>
+            </div>
+          )}
+        </div>
+
+        <div style={cardMetaStyle}>
+          {desktop.purpose && <div style={{ gridColumn: "1 / -1" }}><Text type="secondary">用途:</Text> <span style={{ overflowWrap: "anywhere" }}>{desktop.purpose}</span></div>}
+          <div><Text type="secondary">运行:</Text> {runtime}</div>
+          <div><Text type="secondary">协议:</Text> {desktop.protocol.toUpperCase()}</div>
+          <div><Text type="secondary">分辨率:</Text> {desktop.resolution}</div>
+          <div><Text type="secondary">档位:</Text> {desktopProfileText(desktop.performance_profile)}</div>
+          <div><Text type="secondary">当前带宽:</Text> {formatCardBandwidth(desktop.current_bandwidth_bps)}</div>
+          <div><Text type="secondary">峰值带宽:</Text> {formatCardBandwidth(desktop.peak_bandwidth_bps)}</div>
+          <div><Text type="secondary">端口:</Text> {desktop.port}</div>
+          <div><Text type="secondary">IP:</Text> <span style={{ overflowWrap: "anywhere" }}>{desktop.host_ip}</span></div>
+        </div>
+
+        <div style={cardActionStyle}>
+          <Space direction="vertical" style={{ width: "100%" }} size="small">
+            <div style={{ display: "flex", gap: 6 }}>
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                onClick={onConnect}
+                disabled={!isRunning}
+                title="连接"
+              />
+              <Button
+                danger
+                size="small"
+                icon={<StopOutlined />}
+                onClick={onTerminate}
+                disabled={!canStop}
+                title="关闭"
+              />
+              {canInviteDesktop(desktop.status) && (
+                <Button
+                  size="small"
+                  icon={<TeamOutlined />}
+                  onClick={onInvite}
+                  title="邀请协助"
+                />
+              )}
+              {isRunning && (
+                <Button
+                  size="small"
+                  icon={<InboxOutlined />}
+                  onClick={onOpenFileTransfer}
+                  title="文件传输"
+                />
+              )}
+            </div>
+            {activeInvites.length > 0 && (
+              <div style={{ marginTop: 4, padding: "6px 8px", background: "#f0f5ff", borderRadius: 6, border: "1px solid #d6e4ff", width: "100%" }}>
+                <div style={{ fontSize: 9, color: "#1677ff", marginBottom: 4, fontWeight: 500 }}>活跃协助</div>
+                {activeInvites.map(inv => (
+                  <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 3 }}>
+                    <span style={{ fontSize: 10 }}>{inv.invitee?.username || "未知用户"}</span>
+                    <Button
+                      size="small"
+                      danger
+                      style={{ fontSize: 11, padding: "0 6px", height: 22 }}
+                      onClick={() => onStopInvite(inv.id)}
+                    >
+                      终止
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {isTerminated && (
+              <Button
+                danger
+                ghost
+                size="small"
+                icon={<DeleteOutlined />}
+                block
+                onClick={onDelete}
+              >
+                删除
+              </Button>
+            )}
+          </Space>
+        </div>
+      </div>
+    </Card>
+  );
+};
 
 const DesktopsPage: React.FC = () => {
   const [desktops, setDesktops] = useState<DesktopSession[]>([]);
@@ -92,40 +467,55 @@ const DesktopsPage: React.FC = () => {
   const [inviteForm] = Form.useForm();
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteDesktop, setInviteDesktop] = useState<DesktopSession | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [forceClosingAll, setForceClosingAll] = useState(false);
   
   const [form] = Form.useForm();
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
   const { open: openFileTransfer } = useFileTransferStore();
 
+  const copyText = async (value: string, label: string = "内容") => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      message.success(`${label}已复制`);
+    } catch {
+      message.error("复制失败");
+    }
+  };
+
+  const formatMemory = (mb?: number) => {
+    if (!mb) return "-";
+    return `${(mb / 1024).toFixed(1)}G`;
+  };
+
+  const formatRuntime = (createdAt: string, status: string) => {
+    if (!createdAt || !["running", "starting", "stopping"].includes(status)) return "-";
+    const started = new Date(createdAt).getTime();
+    if (!Number.isFinite(started)) return "-";
+    const totalSeconds = Math.max(0, Math.floor((now - started) / 1000));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (days > 0) return `${days}天${hours}小时`;
+    if (hours > 0) return `${hours}小时${minutes}分`;
+    return `${Math.max(1, minutes)}分`;
+  };
+
+  const highRecentBandwidth = desktops.some((desktop) => (desktop.current_bandwidth_bps || 0) > 5_000_000);
+
+  const hostDisabledReason = (host: HostOption) => {
+    if (!host.current_user_exists) return "当前用户不存在";
+    if (!host.ready) return host.missing?.length ? `缺失 ${host.missing.join(", ")}` : "节点未就绪";
+    return "";
+  };
+
   const runningCount = desktops.filter((desktop) => desktop.status === "running").length;
-  const pendingCount = desktops.filter((desktop) => desktop.status === "pending").length;
+  const pendingCount = desktops.filter((desktop) => isProcessingStatus(desktop.status)).length;
   const terminatedCount = desktops.filter((desktop) => desktop.status === "terminated").length;
+  const activeCount = desktops.filter((desktop) => canBatchTerminateDesktop(desktop.status)).length;
 
-
-  const cardShellStyle: React.CSSProperties = {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "flex-start",
-    gap: 14,
-  };
-
-  const cardMetaStyle: React.CSSProperties = {
-    flex: "1 1 220px",
-    minWidth: 0,
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(108px, 1fr))",
-    gap: "8px 14px",
-    fontSize: 11.5,
-    color: "#4e5969",
-    lineHeight: 1.7,
-  };
-
-  const cardActionStyle: React.CSSProperties = {
-    flex: "0 1 152px",
-    minWidth: 126,
-    marginLeft: "auto",
-  };
 
     const fetchInvited = async () => {
     try {
@@ -173,9 +563,11 @@ const fetchDesktops = async () => {
     fetchMySentInvites();
     const interval = setInterval(fetchDesktops, 30000);
     const inviteInterval = setInterval(fetchMySentInvites, 10000);
+    const clockInterval = setInterval(() => setNow(Date.now()), 60000);
     return () => {
       clearInterval(interval);
       clearInterval(inviteInterval);
+      clearInterval(clockInterval);
     };
   }, []);
 
@@ -185,7 +577,7 @@ const fetchDesktops = async () => {
     if (ids.length === 0) return;
     const runningIds = ids.filter((id) => {
       const d = desktops.find((x) => x.id === id);
-      return d && d.status === "running";
+      return d && canBatchTerminateDesktop(d.status);
     });
     if (runningIds.length === 0) {
       message.warning("没有可关闭的运行中桌面");
@@ -250,6 +642,40 @@ const fetchDesktops = async () => {
     });
   };
 
+  const handleForceTerminateAll = () => {
+    if (!isAdmin) return;
+    if (activeCount === 0) {
+      message.info("当前没有需要关闭的活动桌面");
+      return;
+    }
+    Modal.confirm({
+      title: `强制关闭全部 ${activeCount} 个活动桌面？`,
+      content: "该操作会关闭所有用户的运行中、启动中、异常和关闭中的桌面，用于快速释放宿主机资源。",
+      okText: "强制关闭全部",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        setForceClosingAll(true);
+        try {
+          const res = await desktopAPI.forceTerminateAll();
+          const successCount = res.data?.successCount ?? 0;
+          const failedCount = res.data?.failedCount ?? 0;
+          if (failedCount > 0) {
+            message.warning(`已关闭 ${successCount} 个，失败 ${failedCount} 个`);
+          } else {
+            message.success(`已强制关闭 ${successCount} 个桌面`);
+          }
+          setSelectedRowKeys([]);
+          fetchDesktops();
+        } catch (e: any) {
+          message.error(e.response?.data?.error || "强制关闭全部桌面失败");
+        } finally {
+          setForceClosingAll(false);
+        }
+      },
+    });
+  };
+
   const handleApply = async (values: any) => {
     setApplying(true);
     try {
@@ -259,7 +685,10 @@ const fetchDesktops = async () => {
         color_depth: values.color_depth || 24,
         desktop_env: values.desktop_env,
         vnc_backend: values.protocol === "vnc" ? (values.vnc_backend || "turbovnc") : undefined,
+        performance_profile: values.performance_profile || "balanced",
         host_id: values.host_id === "auto" ? undefined : values.host_id,
+        display_name: values.display_name,
+        purpose: values.purpose,
       });
       message.success(
         <span>
@@ -318,8 +747,11 @@ const fetchDesktops = async () => {
   const statusColor = (s: string) => {
     switch (s) {
       case "running": return "green";
-      case "pending": return "orange";
+      case "pending":
+      case "starting": return "gold";
+      case "stopping": return "orange";
       case "terminated": return "default";
+      case "error": return "red";
       default: return "red";
     }
   };
@@ -327,14 +759,29 @@ const fetchDesktops = async () => {
   const statusText = (s: string) => {
     switch (s) {
       case "running": return "运行中";
-      case "pending": return "创建中";
+      case "pending": return "待创建";
+      case "starting": return "启动中";
+      case "stopping": return "关闭中";
       case "terminated": return "已关闭";
+      case "error": return "异常";
       default: return s;
     }
   };
 
   // 表格列定义
   const baseColumns = [
+    {
+      title: "名称/用途",
+      dataIndex: "display_name",
+      key: "display_name",
+      width: 180,
+      render: (_: string, record: DesktopSession) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{record.display_name || record.host_name}</Text>
+          {record.purpose && <Text type="secondary" style={{ fontSize: 12 }}>{record.purpose}</Text>}
+        </Space>
+      ),
+    },
     {
       title: "协议",
       dataIndex: "protocol",
@@ -365,6 +812,12 @@ const fetchDesktops = async () => {
     },
     { title: "端口", dataIndex: "port", key: "port", width: 80 },
     {
+      title: "运行时长",
+      key: "runtime",
+      width: 100,
+      render: (_: any, record: DesktopSession) => formatRuntime(record.created_at, record.status),
+    },
+    {
       title: "创建时间",
       dataIndex: "created_at",
       key: "created_at",
@@ -383,6 +836,7 @@ const fetchDesktops = async () => {
               type="primary"
               icon={<PlayCircleOutlined />}
               onClick={() => setConnectModal(record)}
+              disabled={!canConnectDesktop(record.status)}
             />
           </Tooltip>
           <Tooltip title="文件传输">
@@ -390,6 +844,7 @@ const fetchDesktops = async () => {
               size="small"
               icon={<InboxOutlined />}
               onClick={() => openFileTransfer(record.id, record.host_name || record.id)}
+              disabled={!canConnectDesktop(record.status)}
             />
           </Tooltip>
           <Tooltip title="关闭">
@@ -398,10 +853,10 @@ const fetchDesktops = async () => {
               danger
               icon={<StopOutlined />}
               onClick={() => handleTerminate(record.id)}
-              disabled={record.status === "terminated"}
+              disabled={!canStopDesktop(record.status)}
             />
           </Tooltip>
-          {record.status !== "terminated" && (
+          {canInviteDesktop(record.status) && (
             <Tooltip title="邀请协作者">
               <Button
                 size="small"
@@ -458,6 +913,37 @@ const fetchDesktops = async () => {
     const url = desktop.connection_info?.url || "";
     const webUrl = desktop.connection_info?.web_url || "";
     const password = desktop.connection_info?.password || "";
+    const errorText = desktop.connection_info?.error || "";
+    const openWebDesktop = (fullscreen = false) => {
+      if (!webUrl) return;
+      const target = new URL(webUrl);
+      target.searchParams.set("autoconnect", "true");
+      target.searchParams.set("reconnect", "true");
+      const features = fullscreen
+        ? `noopener,noreferrer,width=${window.screen.availWidth},height=${window.screen.availHeight},left=0,top=0`
+        : "noopener,noreferrer,width=1280,height=800";
+      window.open(target.toString(), "_blank", features);
+    };
+    const CopyField = ({ label, value, password: isPassword = false }: { label: string; value: string; password?: boolean }) => (
+      <div style={{ marginBottom: 12 }}>
+        <Text type="secondary">{label}</Text>
+        {isPassword ? (
+          <Input.Password
+            value={value}
+            readOnly
+            style={{ marginTop: 4 }}
+            suffix={<Button size="small" icon={<CopyOutlined />} onClick={() => copyText(value, label)} />}
+          />
+        ) : (
+          <Input
+            value={value}
+            readOnly
+            style={{ marginTop: 4 }}
+            suffix={<Button size="small" icon={<CopyOutlined />} onClick={() => copyText(value, label)} />}
+          />
+        )}
+      </div>
+    );
 
     return (
       <Tabs defaultActiveKey="client">
@@ -466,29 +952,25 @@ const fetchDesktops = async () => {
           key="client"
         >
           <div style={{ padding: "12px 0" }}>
-            <p><b>协议:</b> {desktop.protocol.toUpperCase()}</p>
-            <p><b>地址:</b> {desktop.host_ip}:{desktop.port}</p>
-            <p>
-              <b>URL:</b>
-              <Input value={url} readOnly style={{ marginTop: 4 }}
-                suffix={
-                  <Button size="small" onClick={() => { navigator.clipboard.writeText(url); message.success("已复制"); }}>
-                    复制
-                  </Button>
-                }
+            {desktop.status === "error" && errorText && (
+              <Alert
+                type="error"
+                showIcon
+                message="桌面异常"
+                description={errorText}
+                style={{ marginBottom: 12 }}
               />
-            </p>
+            )}
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Tag color={statusColor(desktop.status)}>{statusText(desktop.status)}</Tag>
+              <Tag color="blue">{desktop.protocol.toUpperCase()}</Tag>
+              <Tag>{desktop.resolution}</Tag>
+            </Space>
+            <CopyField label="VNC URL" value={url} />
+            <CopyField label="宿主机 IP" value={desktop.host_ip} />
+            <CopyField label="端口" value={String(desktop.port || "")} />
             {password && (
-              <p>
-                <b>密码:</b>
-                <Input.Password value={password} readOnly style={{ marginTop: 4 }}
-                  suffix={
-                    <Button size="small" onClick={() => { navigator.clipboard.writeText(password); message.success("已复制"); }}>
-                      复制
-                    </Button>
-                  }
-                />
-              </p>
+              <CopyField label="密码" value={password} password />
             )}
             <p style={{ marginTop: 12, color: "#888" }}>
               请使用 VNC Viewer、TigerVNC 等客户端工具连接
@@ -500,26 +982,23 @@ const fetchDesktops = async () => {
           key="web"
         >
           <div style={{ padding: "12px 0" }}>
-            <p>无需安装客户端，直接在浏览器中打开 VNC 桌面：</p>
             {webUrl ? (
               <>
-                <Button
-                  type="primary"
-                  icon={<GlobalOutlined />}
-                  onClick={() => window.open(webUrl, "_blank", "width=1280,height=800")}
-                  style={{ marginBottom: 12 }}
-                >
-                  新窗口打开 VNC 桌面
-                </Button>
-                <p style={{ marginTop: 8, color: "#888", fontSize: 12 }}>
-                  如遇安全证书警告，请点击「高级」→「继续访问」
-                </p>
-                <Input.TextArea
-                  value={webUrl}
-                  readOnly
-                  rows={2}
-                  style={{ marginTop: 8 }}
-                />
+                <Space wrap style={{ marginBottom: 12 }}>
+                  <Button type="primary" icon={<GlobalOutlined />} onClick={() => openWebDesktop(false)}>
+                    打开
+                  </Button>
+                  <Button icon={<ReloadOutlined />} onClick={() => openWebDesktop(false)}>
+                    重连
+                  </Button>
+                  <Button icon={<FullscreenOutlined />} onClick={() => openWebDesktop(true)}>
+                    全屏窗口
+                  </Button>
+                  <Button icon={<CopyOutlined />} onClick={() => copyText(webUrl, "Web URL")}>
+                    复制链接
+                  </Button>
+                </Space>
+                <CopyField label="Web URL" value={webUrl} />
               </>
             ) : (
               <Empty description="该桌面不支持浏览器访问" />
@@ -527,156 +1006,6 @@ const fetchDesktops = async () => {
           </div>
         </TabPane>
       </Tabs>
-    );
-  };
-
-  // 桌面卡片组件（横向布局）
-  const DesktopCard = ({ desktop }: { desktop: DesktopSession }) => {
-    const isRunning = desktop.status === "running";
-    const isTerminated = desktop.status === "terminated";
-    const isWindows = desktop.host_os?.toLowerCase().includes("win");
-
-    return (
-      <Card
-        hoverable
-        className="rdp-soft-card"
-        style={{
-          position: "relative",
-          overflow: "hidden",
-        }}
-        bodyStyle={{ padding: "14px 14px 12px" }}
-      >
-        <div style={cardShellStyle}>
-          {/* checkbox far left */}
-          <div style={{ flex: "0 0 auto", alignSelf: "center", paddingRight: 4 }}>
-            <Checkbox
-              checked={selectedRowKeys.includes(desktop.id)}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  setSelectedRowKeys([...selectedRowKeys, desktop.id]);
-                } else {
-                  setSelectedRowKeys(selectedRowKeys.filter((k) => k !== desktop.id));
-                }
-              }}
-            />
-          </div>
-
-          {/* 左侧：图标 + 名称 + 状态 + 用户名 */}
-          <div style={{ flex: "0 1 120px", minWidth: 96, textAlign: "center" }}>
-            <div style={{ marginBottom: 4 }}>
-              {isWindows ? (
-                <WindowsOutlined style={{ fontSize: 28, color: "#1890ff" }} />
-              ) : (
-                <LinuxOutlined style={{ fontSize: 28, color: "#52c41a" }} />
-              )}
-            </div>
-            <Text strong style={{ fontSize: 14, display: "block", overflowWrap: "anywhere" }}>
-              {desktop.host_name}
-            </Text>
-            <Tag color={statusColor(desktop.status)} style={{ marginTop: 6, fontSize: 10, height: "auto", lineHeight: 1.4 }}>
-              {statusText(desktop.status)}
-            </Tag>
-            {desktop.username && (
-              <div style={{ marginTop: 4 }}>
-                <Text type="secondary" style={{ fontSize: 11, overflowWrap: "anywhere" }}>{desktop.username}</Text>
-              </div>
-            )}
-          </div>
-
-          {/* 中间：详细信息 */}
-          <div style={cardMetaStyle}>
-            <div><Text type="secondary">协议:</Text> {desktop.protocol.toUpperCase()}</div>
-            <div><Text type="secondary">分辨率:</Text> {desktop.resolution}</div>
-            <div><Text type="secondary">端口:</Text> {desktop.port}</div>
-            <div><Text type="secondary">IP:</Text> <span style={{ overflowWrap: "anywhere" }}>{desktop.host_ip}</span></div>
-          </div>
-
-          {/* 右侧：操作按钮 */}
-          <div style={cardActionStyle}>
-            <Space direction="vertical" style={{ width: "100%" }} size="small">
-              <div style={{ display: "flex", gap: 6 }}>
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<PlayCircleOutlined />}
-                  onClick={() => setConnectModal(desktop)}
-                  disabled={!isRunning}
-                  title="连接"
-                />
-                <Button
-                  danger
-                  size="small"
-                  icon={<StopOutlined />}
-                  onClick={() => handleTerminate(desktop.id)}
-                  disabled={!isRunning}
-                  title="关闭"
-                />
-                {isRunning && (
-                  <Button
-                    size="small"
-                    icon={<TeamOutlined />}
-                    onClick={() => {
-                      setInviteDesktop(desktop);
-                      setInviteModalOpen(true);
-                    }}
-                    title="邀请协助"
-                  />
-                )}
-                {isRunning && (
-                  <Button
-                    size="small"
-                    icon={<InboxOutlined />}
-                    onClick={() => openFileTransfer(desktop.id, desktop.host_name || desktop.id)}
-                    title="文件传输"
-                  />
-                )}
-              </div>
-              {/* 活跃协助管理 */}
-              {mySentInvites.filter(inv => inv.session_id === desktop.id && inv.status === "active").length > 0 && (
-                <div style={{ marginTop: 4, padding: "6px 8px", background: "#f0f5ff", borderRadius: 6, border: "1px solid #d6e4ff", width: "100%" }}>
-                  <div style={{ fontSize: 9, color: "#1677ff", marginBottom: 4, fontWeight: 500 }}>活跃协助</div>
-                  {mySentInvites
-                    .filter(inv => inv.session_id === desktop.id && inv.status === "active")
-                    .map(inv => (
-                      <div key={inv.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 3 }}>
-                        <span style={{ fontSize: 10 }}>{inv.invitee?.username || "未知用户"}</span>
-                        <Button
-                          size="small"
-                          danger
-                          style={{ fontSize: 11, padding: "0 6px", height: 22 }}
-                          onClick={async () => {
-                            try {
-                              await collaborationAPI.stop(inv.id);
-                              message.success("已终止协助");
-                              fetchMySentInvites();
-                            } catch (e: any) {
-                              message.error(e.response?.data?.error || "终止失败");
-                            }
-                          }}
-                        >
-                          终止
-                        </Button>
-                      </div>
-                    ))
-                  }
-                </div>
-              )}
-              {isTerminated && (
-                <Button
-                  danger
-                  ghost
-                  size="small"
-                  icon={<DeleteOutlined />}
-                  block
-                  onClick={() => handleDelete(desktop.id)}
-                >
-                  删除
-                </Button>
-              )}
-            </Space>
-          </div>
-        </div>
-      </Card>
     );
   };
 
@@ -691,6 +1020,17 @@ const fetchDesktops = async () => {
         </div>
         <Space wrap>
           {isAdmin && <Tag color="red">管理员视图</Tag>}
+          {isAdmin && (
+            <Button
+              danger
+              icon={<CloseSquareOutlined />}
+              loading={forceClosingAll}
+              disabled={activeCount === 0}
+              onClick={handleForceTerminateAll}
+            >
+              强制关闭全部
+            </Button>
+          )}
           <Button type="primary" icon={<PlusOutlined />} onClick={() => {
             fetchAvailableHosts();
             setModalOpen(true);
@@ -712,9 +1052,9 @@ const fetchDesktops = async () => {
           <div className="rdp-stat-meta"><span>可直接连接或发起协助</span></div>
         </Card>
         <Card className="rdp-soft-card">
-          <div className="rdp-stat-label">创建中</div>
+          <div className="rdp-stat-label">处理中</div>
           <div className="rdp-stat-value" style={{ fontSize: 32 }}>{pendingCount}</div>
-          <div className="rdp-stat-meta"><span>等待桌面服务初始化</span></div>
+          <div className="rdp-stat-meta"><span>正在启动或关闭的会话</span></div>
         </Card>
         <Card className="rdp-soft-card">
           <div className="rdp-stat-label">已关闭</div>
@@ -808,8 +1148,38 @@ const fetchDesktops = async () => {
             ) : (
               <Row gutter={[16, 16]}>
                 {desktops.map((desktop) => (
-                  <Col key={desktop.id} xs={24} sm={12} md={8} lg={6} xl={4}>
-                    <DesktopCard desktop={desktop} />
+                  <Col key={desktop.id} xs={24} sm={12} md={8} lg={6} xl={6}>
+                    <DesktopCard
+                      desktop={desktop}
+                      selected={selectedRowKeys.includes(desktop.id)}
+                      runtime={formatRuntime(desktop.created_at, desktop.status)}
+                      sentInvites={mySentInvites}
+                      onSelectedChange={(checked) => {
+                        setSelectedRowKeys((prev) => {
+                          if (checked) {
+                            return prev.includes(desktop.id) ? prev : [...prev, desktop.id];
+                          }
+                          return prev.filter((key) => key !== desktop.id);
+                        });
+                      }}
+                      onConnect={() => setConnectModal(desktop)}
+                      onTerminate={() => handleTerminate(desktop.id)}
+                      onInvite={() => {
+                        setInviteDesktop(desktop);
+                        setInviteModalOpen(true);
+                      }}
+                      onOpenFileTransfer={() => openFileTransfer(desktop.id, desktop.display_name || desktop.host_name || desktop.id)}
+                      onStopInvite={async (inviteID) => {
+                        try {
+                          await collaborationAPI.stop(inviteID);
+                          message.success("已终止协助");
+                          fetchMySentInvites();
+                        } catch (e: any) {
+                          message.error(e.response?.data?.error || "终止失败");
+                        }
+                      }}
+                      onDelete={() => handleDelete(desktop.id)}
+                    />
                   </Col>
                 ))}
               </Row>
@@ -933,20 +1303,78 @@ const fetchDesktops = async () => {
         okText="申请"
       >
         <Form form={form} layout="vertical" onFinish={handleApply}>
+          <Form.Item
+            name="display_name"
+            label="桌面名称"
+            rules={[{ max: 64, message: "桌面名称最多 64 个字符" }]}
+          >
+            <Input placeholder="例如：仿真任务、数据分析、临时调试" maxLength={64} />
+          </Form.Item>
+          <Form.Item
+            name="purpose"
+            label="用途说明"
+            rules={[{ max: 200, message: "用途说明最多 200 个字符" }]}
+          >
+            <Input.TextArea
+              placeholder="标注这个桌面的用途，方便后续区分和协同"
+              maxLength={200}
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              showCount
+            />
+          </Form.Item>
           <Form.Item name="host_id" label="运行节点" initialValue="auto" rules={[{ required: true }]}>
-            <Select placeholder="请选择运行节点">
-              <Select.Option value="auto">自动调度（推荐）</Select.Option>
-              {availableHosts.map((host) => (
-                <Select.Option key={host.id} value={host.id}>
-                  {host.hostname} · {host.ip_address}（{host.current_sessions}/{host.max_sessions}）
-                </Select.Option>
-              ))}
+            <Select placeholder="请选择运行节点" optionLabelProp="label">
+              <Select.Option value="auto" label="自动调度（推荐）">
+                <Space direction="vertical" size={0}>
+                  <Text strong>自动调度（推荐）</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>按节点负载和可用性自动选择</Text>
+                </Space>
+              </Select.Option>
+              {availableHosts.map((host) => {
+                const reason = hostDisabledReason(host);
+                const loadText = `${host.current_sessions}/${host.max_sessions}`;
+                return (
+                  <Select.Option
+                    key={host.id}
+                    value={host.id}
+                    label={`${host.hostname} · ${host.ip_address}`}
+                    disabled={!!reason}
+                  >
+                    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                      <Space wrap size={6}>
+                        <Text strong>{host.hostname}</Text>
+                        <Tag color={host.agent_managed ? "purple" : "default"}>{host.agent_managed ? "Agent" : "SSH"}</Tag>
+                        <Tag color={reason ? "red" : "green"}>{reason ? "不可用" : "可用"}</Tag>
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {host.ip_address} · {host.region || "默认区域"}/{host.az || "默认可用区"} · 负载 {loadText} · {host.cpu_cores || "-"}C/{formatMemory(host.total_ram_mb)}
+                      </Text>
+                      {reason && <Text type="danger" style={{ fontSize: 12 }}>{reason}</Text>}
+                    </Space>
+                  </Select.Option>
+                );
+              })}
             </Select>
           </Form.Item>
           <Form.Item name="desktop_env" label="桌面环境" initialValue="gnome" rules={[{ required: true }]}>
             <Select>
               <Select.Option value="gnome">GNOME</Select.Option>
               <Select.Option value="xfce">XFCE</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="performance_profile" label="性能档位" initialValue="balanced" rules={[{ required: true }]}>
+            <Select
+              onChange={(value) => {
+                if (value === "low_bandwidth") {
+                  form.setFieldsValue({ resolution: "1280x720", color_depth: 16, desktop_env: "xfce" });
+                } else if (value === "quality") {
+                  form.setFieldsValue({ resolution: "1920x1080", color_depth: 24 });
+                }
+              }}
+            >
+              <Select.Option value="quality">画质优先</Select.Option>
+              <Select.Option value="balanced">均衡</Select.Option>
+              <Select.Option value="low_bandwidth">低带宽</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="protocol" label="协议类型" initialValue="vnc" rules={[{ required: true }]}>
@@ -982,6 +1410,32 @@ const fetchDesktops = async () => {
               <Select.Option value={16}>16-bit (高彩色)</Select.Option>
               <Select.Option value={8}>8-bit (256色)</Select.Option>
             </Select>
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldValue }) => {
+              const profile = getFieldValue("performance_profile") || "balanced";
+              const resolution = getFieldValue("resolution") || "";
+              const colorDepth = getFieldValue("color_depth") || 24;
+              const desktopEnv = getFieldValue("desktop_env") || "gnome";
+              const selectedHost = availableHosts.find((host) => host.id === getFieldValue("host_id"));
+              const reasons: string[] = [];
+              if (profile === "quality") reasons.push("画质优先会提高持续带宽占用");
+              if (resolution === "1920x1080") reasons.push("高分辨率会增加画面刷新数据量");
+              if (colorDepth === 24) reasons.push("24-bit 色深比 16-bit 更耗带宽");
+              if (desktopEnv === "gnome") reasons.push("GNOME 动画和合成效果可能带来额外刷新");
+              if (selectedHost?.region && selectedHost.region !== "local") reasons.push("非本地区域节点可能受跨地域链路影响");
+              if (highRecentBandwidth) reasons.push("近期已有会话带宽较高");
+              if (profile === "low_bandwidth" || reasons.length === 0) return null;
+              return (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="建议使用低带宽档位"
+                  description={`${reasons.join("；")}。可以切换到低带宽档位，或手动选择 1280x720、16-bit、XFCE。`}
+                />
+              );
+            }}
           </Form.Item>
         </Form>
       </Modal>

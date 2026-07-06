@@ -10,7 +10,9 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"regexp"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -34,9 +36,12 @@ type Agent struct {
 	hostID     string
 	agentToken string
 	stopCh     chan struct{}
+	writeMu    sync.Mutex
 	started    bool
 	seq        int64
 	failOnce   sync.Once
+	desktopMu  sync.Mutex
+	desktops   map[string]*trackedDesktop
 }
 
 // protocol message types (对齐 master-service/grpc/server.go)
@@ -71,6 +76,26 @@ type resourceReportPayload struct {
 	DiskUsagePercent     float32 `json:"disk_usage_percent"`
 }
 
+type trackedDesktop struct {
+	SessionID  string
+	WSPort     int
+	LastBytes  uint64
+	LastSample time.Time
+	PeakBps    int64
+}
+
+type sessionBandwidthReportPayload struct {
+	Sessions []sessionBandwidthSample `json:"sessions"`
+}
+
+type sessionBandwidthSample struct {
+	SessionID    string `json:"session_id"`
+	CurrentBps   int64  `json:"current_bps"`
+	PeakBps      int64  `json:"peak_bps"`
+	TotalBytes   uint64 `json:"total_bytes"`
+	SampledAtUTC string `json:"sampled_at"`
+}
+
 type masterInstruction struct {
 	InstructionID string          `json:"instruction_id"`
 	Timestamp     int64           `json:"timestamp"`
@@ -79,19 +104,37 @@ type masterInstruction struct {
 }
 
 type createDesktopPayload struct {
-	SessionID         string `json:"session_id"`
-	Username          string `json:"username"`
-	Protocol          string `json:"protocol"`
-	Resolution        string `json:"resolution"`
-	ColorDepth        int    `json:"color_depth"`
-	TimeoutMinutes    int    `json:"timeout_minutes"`
-	RequireGPU        bool   `json:"require_gpu"`
-	RequestedGPUCount int    `json:"requested_gpu_count"`
+	SessionID          string `json:"session_id"`
+	Username           string `json:"username"`
+	Protocol           string `json:"protocol"`
+	Resolution         string `json:"resolution"`
+	ColorDepth         int    `json:"color_depth"`
+	Display            int    `json:"display"`
+	Port               int    `json:"port"`
+	WSPort             int    `json:"ws_port"`
+	Password           string `json:"password"`
+	DesktopEnv         string `json:"desktop_env"`
+	VNCBackend         string `json:"vnc_backend"`
+	PerformanceProfile string `json:"performance_profile"`
+	VNCOptions         string `json:"vnc_options"`
+	TimeoutMinutes     int    `json:"timeout_minutes"`
+	RequireGPU         bool   `json:"require_gpu"`
+	RequestedGPUCount  int    `json:"requested_gpu_count"`
 }
 
 type terminateDesktopPayload struct {
+	SessionID  string `json:"session_id"`
+	Username   string `json:"username"`
+	Display    int    `json:"display"`
+	WSPort     int    `json:"ws_port"`
+	VNCBackend string `json:"vnc_backend"`
+	Force      bool   `json:"force"`
+}
+
+type desktopUpdatePayload struct {
 	SessionID string `json:"session_id"`
-	Force     bool   `json:"force"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 }
 
 type registerResponse struct {
@@ -104,8 +147,9 @@ type registerResponse struct {
 // New 创建 Agent 实例
 func New(cfg *Config) (*Agent, error) {
 	return &Agent{
-		config: cfg,
-		stopCh: make(chan struct{}),
+		config:   cfg,
+		stopCh:   make(chan struct{}),
+		desktops: make(map[string]*trackedDesktop),
 	}, nil
 }
 
@@ -191,6 +235,7 @@ func (a *Agent) heartbeatLoop() {
 		case <-ticker.C:
 			a.sendHeartbeat()
 			a.sendResourceReport()
+			a.sendBandwidthReport()
 		case <-a.stopCh:
 			return
 		}
@@ -208,7 +253,7 @@ func (a *Agent) sendHeartbeat() {
 		Timestamp: time.Now().Unix(),
 		Payload:   payload,
 	}
-	if err := a.conn.WriteJSON(msg); err != nil {
+	if err := a.writeJSON(msg); err != nil {
 		a.failConnection("发送心跳失败", err)
 	}
 }
@@ -218,7 +263,7 @@ func (a *Agent) sendResourceReport() {
 	report := resourceReportPayload{
 		CPUUsagePercent:      float32(getCPUUsage()),
 		AvailableRAMMB:       getAvailableRAM(),
-		ActiveSessions:       int(getActiveSessionCount()),
+		ActiveSessions:       a.activeDesktopCount(),
 		GPUUsagePercent:      0, // TODO: 读取 GPU
 		AvailableGPUMemoryMB: 0,
 		DiskUsagePercent:     float32(getDiskUsage()),
@@ -230,8 +275,131 @@ func (a *Agent) sendResourceReport() {
 		Timestamp: time.Now().Unix(),
 		Payload:   payload,
 	}
-	if err := a.conn.WriteJSON(msg); err != nil {
+	if err := a.writeJSON(msg); err != nil {
 		a.failConnection("发送资源报告失败", err)
+	}
+}
+
+func (a *Agent) sendBandwidthReport() {
+	now := time.Now().UTC()
+	samples := a.sampleBandwidth(now)
+	if len(samples) == 0 {
+		return
+	}
+	payload, _ := json.Marshal(sessionBandwidthReportPayload{Sessions: samples})
+	msg := agentMessage{
+		Type:      "session_bandwidth",
+		HostID:    a.hostID,
+		Timestamp: time.Now().Unix(),
+		Payload:   payload,
+	}
+	if err := a.writeJSON(msg); err != nil {
+		a.failConnection("发送带宽报告失败", err)
+	}
+}
+
+func (a *Agent) trackDesktop(payload createDesktopPayload) {
+	if payload.Protocol != "vnc" || payload.WSPort <= 0 {
+		return
+	}
+	a.desktopMu.Lock()
+	defer a.desktopMu.Unlock()
+	a.desktops[payload.SessionID] = &trackedDesktop{
+		SessionID:  payload.SessionID,
+		WSPort:     payload.WSPort,
+		LastSample: time.Now().UTC(),
+	}
+}
+
+func (a *Agent) untrackDesktop(sessionID string) {
+	a.desktopMu.Lock()
+	defer a.desktopMu.Unlock()
+	delete(a.desktops, sessionID)
+}
+
+func (a *Agent) activeDesktopCount() int {
+	a.desktopMu.Lock()
+	defer a.desktopMu.Unlock()
+	return len(a.desktops)
+}
+
+func (a *Agent) sampleBandwidth(now time.Time) []sessionBandwidthSample {
+	a.desktopMu.Lock()
+	defer a.desktopMu.Unlock()
+
+	samples := make([]sessionBandwidthSample, 0, len(a.desktops))
+	for _, desktop := range a.desktops {
+		totalBytes, ok := sampleSocketBytes(desktop.WSPort)
+		if !ok {
+			samples = append(samples, sessionBandwidthSample{
+				SessionID:    desktop.SessionID,
+				CurrentBps:   0,
+				PeakBps:      desktop.PeakBps,
+				TotalBytes:   desktop.LastBytes,
+				SampledAtUTC: now.Format(time.RFC3339),
+			})
+			continue
+		}
+
+		var currentBps int64
+		elapsed := now.Sub(desktop.LastSample).Seconds()
+		if elapsed > 0 && totalBytes >= desktop.LastBytes {
+			currentBps = int64(float64(totalBytes-desktop.LastBytes) * 8 / elapsed)
+		}
+		if currentBps > desktop.PeakBps {
+			desktop.PeakBps = currentBps
+		}
+		desktop.LastBytes = totalBytes
+		desktop.LastSample = now
+
+		samples = append(samples, sessionBandwidthSample{
+			SessionID:    desktop.SessionID,
+			CurrentBps:   currentBps,
+			PeakBps:      desktop.PeakBps,
+			TotalBytes:   totalBytes,
+			SampledAtUTC: now.Format(time.RFC3339),
+		})
+	}
+	return samples
+}
+
+var socketBytesPattern = regexp.MustCompile(`bytes_(?:sent|received):(\d+)`)
+
+func sampleSocketBytes(wsPort int) (uint64, bool) {
+	output, err := runShell(fmt.Sprintf("ss -tinH 'sport = :%d' 2>/dev/null || true", wsPort))
+	if err != nil || output == "" {
+		return 0, false
+	}
+	matches := socketBytesPattern.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
+		return 0, false
+	}
+	var total uint64
+	for _, match := range matches {
+		value, err := strconv.ParseUint(match[1], 10, 64)
+		if err == nil {
+			total += value
+		}
+	}
+	return total, true
+}
+
+func (a *Agent) writeJSON(v interface{}) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return a.conn.WriteJSON(v)
+}
+
+func (a *Agent) sendDesktopUpdate(sessionID, status, errMsg string) {
+	payload, _ := json.Marshal(desktopUpdatePayload{SessionID: sessionID, Status: status, Error: errMsg})
+	msg := agentMessage{
+		Type:      "desktop_update",
+		HostID:    a.hostID,
+		Timestamp: time.Now().Unix(),
+		Payload:   payload,
+	}
+	if err := a.writeJSON(msg); err != nil {
+		a.failConnection("发送桌面状态失败", err)
 	}
 }
 
@@ -277,9 +445,22 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 			log.Printf("解析 create_desktop 失败: %v", err)
 			return
 		}
-		if err := a.CreateDesktop(payload.SessionID, payload.Username, payload.Protocol,
-			payload.Resolution, payload.ColorDepth); err != nil {
+		if err := a.CreateDesktop(payload); err != nil {
 			log.Printf("创建桌面失败: %v", err)
+			if cleanupErr := a.TerminateDesktop(terminateDesktopPayload{
+				SessionID:  payload.SessionID,
+				Username:   payload.Username,
+				Display:    payload.Display,
+				WSPort:     payload.WSPort,
+				VNCBackend: payload.VNCBackend,
+				Force:      true,
+			}); cleanupErr != nil {
+				log.Printf("创建失败后的残留清理失败 session=%s: %v", payload.SessionID, cleanupErr)
+			}
+			a.sendDesktopUpdate(payload.SessionID, "error", err.Error())
+		} else {
+			a.trackDesktop(payload)
+			a.sendDesktopUpdate(payload.SessionID, "running", "")
 		}
 
 	case "terminate_desktop":
@@ -288,8 +469,12 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 			log.Printf("解析 terminate_desktop 失败: %v", err)
 			return
 		}
-		if err := a.TerminateDesktop(payload.SessionID, payload.Force); err != nil {
+		if err := a.TerminateDesktop(payload); err != nil {
 			log.Printf("终止桌面失败: %v", err)
+			a.sendDesktopUpdate(payload.SessionID, "error", err.Error())
+		} else {
+			a.untrackDesktop(payload.SessionID)
+			a.sendDesktopUpdate(payload.SessionID, "terminated", "")
 		}
 
 	case "update_config":
@@ -304,26 +489,24 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 // ========= Desktop 生命周期管理（保留） =========
 
 // CreateDesktop 在本地创建远程桌面会话
-func (a *Agent) CreateDesktop(sessionID, username, protocol, resolution string, colorDepth int) error {
-	exists, err := a.ValidateLocalUser(username)
+func (a *Agent) CreateDesktop(payload createDesktopPayload) error {
+	exists, err := a.ValidateLocalUser(payload.Username)
 	if err != nil || !exists {
 		return fmt.Errorf("本地用户校验失败: %w", err)
 	}
 
-	switch protocol {
+	switch payload.Protocol {
 	case "vnc":
-		return a.createVNCDesktop(sessionID, username, resolution, colorDepth)
+		return a.createVNCDesktop(payload)
 	case "rdp":
-		return a.createRDPDesktop(sessionID, username, resolution, colorDepth)
+		return a.createRDPDesktop(payload.SessionID, payload.Username, payload.Resolution, payload.ColorDepth)
 	default:
-		return fmt.Errorf("不支持的协议: %s", protocol)
+		return fmt.Errorf("不支持的协议: %s", payload.Protocol)
 	}
 }
 
-func (a *Agent) createVNCDesktop(sessionID, username, resolution string, colorDepth int) error {
-	log.Printf("[VNC] 创建桌面 session=%s user=%s", sessionID, username)
-	// TODO: systemd-run --uid={username} vncserver...
-	return nil
+func (a *Agent) createVNCDesktop(payload createDesktopPayload) error {
+	return a.createLinuxVNCDesktop(payload)
 }
 
 func (a *Agent) createRDPDesktop(sessionID, username, resolution string, colorDepth int) error {
@@ -333,10 +516,9 @@ func (a *Agent) createRDPDesktop(sessionID, username, resolution string, colorDe
 }
 
 // TerminateDesktop 终止桌面会话
-func (a *Agent) TerminateDesktop(sessionID string, force bool) error {
-	log.Printf("终止桌面 session=%s force=%v", sessionID, force)
-	// TODO: 查找进程并终止
-	return nil
+func (a *Agent) TerminateDesktop(payload terminateDesktopPayload) error {
+	log.Printf("终止桌面 session=%s force=%v", payload.SessionID, payload.Force)
+	return a.terminateLinuxVNCDesktop(payload)
 }
 
 // ValidateLocalUser 校验本地 OS 用户是否存在
@@ -414,8 +596,4 @@ func getAvailableRAM() int64 {
 
 func getDiskUsage() float64 {
 	return float64(rand.Intn(50)) + rand.Float64()
-}
-
-func getActiveSessionCount() int32 {
-	return 0 // TODO: 统计实际桌面会话数
 }

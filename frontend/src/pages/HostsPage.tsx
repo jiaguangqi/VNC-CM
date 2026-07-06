@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col } from "antd";
+import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col, Empty, Checkbox } from "antd";
 import { PlusOutlined, EyeOutlined, DeleteOutlined, ToolOutlined, ExclamationCircleOutlined, MonitorOutlined, EditOutlined } from "@ant-design/icons";
 import { hostAPI } from "../api";
 
@@ -11,12 +11,15 @@ interface HostRecord {
   max_sessions: number;
   current_sessions: number;
   status: string;
+  agent_managed: boolean;
   ssh_username: string;
   ssh_port: number;
   cpu_cores: number;
   total_ram_mb: number;
   region: string;
   az: string;
+  allowed_users: string;
+  allowed_roles: string;
   agent_version: string;
   last_heartbeat: string;
   labels: string[];
@@ -30,6 +33,9 @@ const HostsPage: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [sshModalOpen, setSshModalOpen] = useState(false);
+  const [readinessModalOpen, setReadinessModalOpen] = useState(false);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessResult, setReadinessResult] = useState<any>(null);
   const [currentHost, setCurrentHost] = useState<HostRecord | null>(null);
 
   const [form] = Form.useForm();
@@ -102,7 +108,11 @@ const HostsPage: React.FC = () => {
 
   const handleAddHost = async (values: any) => {
     try {
-      await hostAPI.create(values);
+      await hostAPI.create({
+        ...values,
+        ssh_auth_type: values.ssh_auth_type || "password",
+        ssh_credential: values.ssh_credential || values.ssh_password,
+      });
       message.success("宿主机添加成功");
       setIsModalOpen(false);
       form.resetFields();
@@ -117,6 +127,21 @@ const HostsPage: React.FC = () => {
     setSshModalOpen(true);
   };
 
+  const openReadiness = async (host: HostRecord) => {
+    setCurrentHost(host);
+    setReadinessModalOpen(true);
+    setReadinessLoading(true);
+    setReadinessResult(null);
+    try {
+      const res = await hostAPI.readiness(host.id);
+      setReadinessResult(res.data);
+    } catch (e: any) {
+      message.error(e.response?.data?.error || "诊断失败");
+    } finally {
+      setReadinessLoading(false);
+    }
+  };
+
   const statusColorMap: Record<string, string> = {
     init: "default",
     healthy: "green",
@@ -129,7 +154,12 @@ const HostsPage: React.FC = () => {
   const handleEdit = async (values: any) => {
     if (!currentHost) return;
     try {
-      await hostAPI.update(currentHost.id, { max_sessions: parseInt(values.max_sessions) });
+      await hostAPI.update(currentHost.id, {
+        max_sessions: parseInt(values.max_sessions),
+        agent_managed: !!values.agent_managed,
+        allowed_users: values.allowed_users || "",
+        allowed_roles: values.allowed_roles || "",
+      });
       message.success(`宿主机 "${currentHost.hostname}" 最大会话数已更新为 ${values.max_sessions}`);
       setIsEditModalOpen(false);
       editForm.resetFields();
@@ -146,6 +176,9 @@ const HostsPage: React.FC = () => {
       ip_address: host.ip_address,
       os_type: host.os_type,
       max_sessions: host.max_sessions,
+      agent_managed: !!host.agent_managed,
+      allowed_users: host.allowed_users || "",
+      allowed_roles: host.allowed_roles || "",
     });
     setIsEditModalOpen(true);
   };
@@ -189,6 +222,15 @@ const HostsPage: React.FC = () => {
         <Tag color={statusColorMap[status] || "default"}>{status?.toUpperCase()}</Tag>
       ),
     },
+    {
+      title: "管理方式",
+      dataIndex: "agent_managed",
+      key: "agent_managed",
+      width: 110,
+      render: (managed: boolean) => (
+        <Tag color={managed ? "purple" : "default"}>{managed ? "Agent" : "SSH"}</Tag>
+      ),
+    },
     { title: "区域", dataIndex: "region", key: "region", width: 100 },
     {
       title: "心跳",
@@ -209,11 +251,19 @@ const HostsPage: React.FC = () => {
       width: 280,
       render: (_: any, record: HostRecord) => (
         <Space>
-          <Button icon={<MonitorOutlined />} size="small" onClick={() => openWebSSH(record)}>
+          <Button
+            icon={<MonitorOutlined />}
+            size="small"
+            onClick={() => openWebSSH(record)}
+            disabled={record.agent_managed && !record.ssh_username}
+          >
             WebSSH
           </Button>
           <Button icon={<EyeOutlined />} size="small" onClick={() => { setCurrentHost(record); setDetailModalOpen(true); }}>
             详情
+          </Button>
+          <Button icon={<ToolOutlined />} size="small" onClick={() => openReadiness(record)}>
+            诊断
           </Button>
           <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)}>
             编辑
@@ -321,6 +371,9 @@ const HostsPage: React.FC = () => {
           <Form.Item name="max_sessions" label="最大并发桌面数" rules={[{ required: true }]}>
             <Input type="number" placeholder="10" />
           </Form.Item>
+          <Form.Item name="agent_managed" valuePropName="checked" initialValue={false}>
+            <Checkbox>Agent 托管节点（SSH 凭据仅作为回退，可不填写）</Checkbox>
+          </Form.Item>
           <Form.Item name="ssh_username" label="SSH 用户名">
             <Input placeholder="root" />
           </Form.Item>
@@ -329,6 +382,12 @@ const HostsPage: React.FC = () => {
           </Form.Item>
           <Form.Item name="ssh_port" label="SSH 端口" initialValue={22}>
             <Input type="number" />
+          </Form.Item>
+          <Form.Item name="allowed_users" label="允许用户">
+            <Input placeholder="留空表示不限；多个用户用英文逗号分隔" />
+          </Form.Item>
+          <Form.Item name="allowed_roles" label="允许角色">
+            <Input placeholder="留空表示不限；例如 admin,user" />
           </Form.Item>
         </Form>
       </Modal>
@@ -353,6 +412,11 @@ const HostsPage: React.FC = () => {
                 {currentHost.status?.toUpperCase()}
               </Tag>
             </Descriptions.Item>
+            <Descriptions.Item label="管理方式">
+              <Tag color={currentHost.agent_managed ? "purple" : "default"}>
+                {currentHost.agent_managed ? "Agent 托管" : "SSH 回退"}
+              </Tag>
+            </Descriptions.Item>
             <Descriptions.Item label="CPU 核心">{currentHost.cpu_cores || "-"}</Descriptions.Item>
             <Descriptions.Item label="内存 (GB)">{(currentHost.total_ram_mb ? (currentHost.total_ram_mb / 1024).toFixed(1) : "-")}</Descriptions.Item>
             <Descriptions.Item label="最大会话">{currentHost.max_sessions || 0}</Descriptions.Item>
@@ -361,6 +425,8 @@ const HostsPage: React.FC = () => {
             <Descriptions.Item label="可用区">{currentHost.az || "-"}</Descriptions.Item>
             <Descriptions.Item label="SSH 用户名">{currentHost.ssh_username || "-"}</Descriptions.Item>
             <Descriptions.Item label="SSH 端口">{currentHost.ssh_port || 22}</Descriptions.Item>
+            <Descriptions.Item label="允许用户">{currentHost.allowed_users || "不限"}</Descriptions.Item>
+            <Descriptions.Item label="允许角色">{currentHost.allowed_roles || "不限"}</Descriptions.Item>
             <Descriptions.Item label="Agent 版本">{currentHost.agent_version || "-"}</Descriptions.Item>
             <Descriptions.Item label="最后心跳">
               {currentHost.last_heartbeat
@@ -373,6 +439,39 @@ const HostsPage: React.FC = () => {
                 : "无"}
             </Descriptions.Item>
           </Descriptions>
+        )}
+      </Modal>
+
+      <Modal
+        title={`节点就绪诊断 - ${currentHost?.hostname || ""}`}
+        open={readinessModalOpen}
+        onCancel={() => setReadinessModalOpen(false)}
+        width={720}
+        footer={[
+          <Button key="close" onClick={() => setReadinessModalOpen(false)}>关闭</Button>,
+        ]}
+      >
+        {readinessLoading ? (
+          <Alert type="info" showIcon message="正在检查节点就绪状态..." />
+        ) : readinessResult ? (
+          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+            <Alert
+              type={readinessResult.ready ? "success" : "warning"}
+              showIcon
+              message={readinessResult.ready ? "节点已就绪" : "节点未完全就绪"}
+              description={readinessResult.missing?.length ? `缺失项：${readinessResult.missing.join(", ")}` : "所有关键检查通过"}
+            />
+            <Descriptions bordered column={1} size="small">
+              {(readinessResult.checks || []).map((check: any) => (
+                <Descriptions.Item key={check.name} label={check.name}>
+                  <Tag color={check.ok ? "green" : "red"}>{check.ok ? "通过" : "失败"}</Tag>
+                  {check.message || ""}
+                </Descriptions.Item>
+              ))}
+            </Descriptions>
+          </Space>
+        ) : (
+          <Empty description="暂无诊断结果" />
         )}
       </Modal>
 
@@ -423,6 +522,15 @@ const HostsPage: React.FC = () => {
             ]}
           >
             <Input type="number" placeholder="如：10" />
+          </Form.Item>
+          <Form.Item name="agent_managed" valuePropName="checked">
+            <Checkbox>Agent 托管节点（SSH 凭据仅作为回退，可不填写）</Checkbox>
+          </Form.Item>
+          <Form.Item name="allowed_users" label="允许用户">
+            <Input placeholder="留空表示不限；多个用户用英文逗号分隔" />
+          </Form.Item>
+          <Form.Item name="allowed_roles" label="允许角色">
+            <Input placeholder="留空表示不限；例如 admin,user" />
           </Form.Item>
         </Form>
       </Modal>

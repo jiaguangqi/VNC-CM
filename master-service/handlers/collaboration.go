@@ -302,6 +302,12 @@ func (h *CollaborationHandler) Invite(c *gin.Context) {
 		return
 	}
 
+	services.RecordAudit(uid.String(), "collaboration_invite", "collaboration", collab.ID.String(), map[string]interface{}{
+		"session_id": sessionID.String(),
+		"invitee_id": inviteeID.String(),
+		"role":       req.Role,
+	}, c.ClientIP())
+
 	database.DB.Preload("Session.Host").Preload("Owner").Preload("Invitee").First(&collab, "id = ?", collab.ID)
 	c.JSON(http.StatusOK, toCollaborationResponse(&collab, getBaseURL(c)))
 }
@@ -381,6 +387,12 @@ func (h *CollaborationHandler) Stop(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
+
+	services.RecordAudit(uid.String(), "collaboration_stop", "collaboration", collab.ID.String(), map[string]interface{}{
+		"session_id": collab.SessionID.String(),
+		"owner_id":   collab.OwnerID.String(),
+		"invitee_id": collab.InviteeID.String(),
+	}, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "已停止协助", "id": collab.ID})
 }

@@ -40,6 +40,7 @@ export const hostAPI = {
   list: (params?: { status?: string; region?: string }) => api.get('/hosts', { params }),
   listDesktopHosts: () => api.get('/desktop-hosts'),
   get: (id: string) => api.get(`/hosts/${id}`),
+  readiness: (id: string, username?: string) => api.get(`/hosts/${id}/readiness`, { params: username ? { username } : undefined }),
   create: (data: any) => api.post('/hosts', data),
   update: (id: string, data: any) => api.patch(`/hosts/${id}`, data),
   delete: (id: string) => api.delete(`/hosts/${id}`),
@@ -49,10 +50,12 @@ export const hostAPI = {
 export const desktopAPI = {
   list: () => api.get('/desktops'),
   create: (data: any) => api.post('/desktops', data),
+  thumbnail: (id: string) => api.get(`/desktops/${id}/thumbnail`, { responseType: 'blob' }),
   terminate: (id: string) => api.delete(`/desktops/${id}`),
   deleteRecord: (id: string) => api.delete(`/desktops/${id}/record`),
   batchTerminate: (ids: string[]) => api.post('/desktops/batch/terminate', { ids }),
   batchDelete: (ids: string[]) => api.post('/desktops/batch/delete', { ids }),
+  forceTerminateAll: () => api.post('/desktops/admin/terminate-all'),
 };
 
 export const fileAPI = {

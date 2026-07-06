@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -16,11 +17,15 @@ import (
 // HostHandler 宿主机处理器
 type HostHandler struct {
 	encryptor *services.EncryptionService
+	readiness *services.NodeReadinessService
 }
 
 // NewHostHandler 创建宿主机处理器
 func NewHostHandler(encryptor *services.EncryptionService) *HostHandler {
-	return &HostHandler{encryptor: encryptor}
+	return &HostHandler{
+		encryptor: encryptor,
+		readiness: services.NewNodeReadinessService(encryptor),
+	}
 }
 
 // CreateHostRequest 添加宿主机请求
@@ -29,6 +34,7 @@ type CreateHostRequest struct {
 	IPAddress     string `json:"ip_address" binding:"required,ip"`
 	OSType        string `json:"os_type" binding:"required,oneof=linux windows"`
 	MaxSessions   int    `json:"max_sessions" binding:"required,min=1,max=1000"`
+	AgentManaged  bool   `json:"agent_managed"`
 	SSHUsername   string `json:"ssh_username"`
 	SSHPort       int    `json:"ssh_port" binding:"min=1,max=65535"`
 	SSHAuthType   string `json:"ssh_auth_type" binding:"oneof=password key"`
@@ -36,6 +42,8 @@ type CreateHostRequest struct {
 	SSHPublicKey  string `json:"ssh_public_key"`
 	Region        string `json:"region"`
 	AZ            string `json:"az"`
+	AllowedUsers  string `json:"allowed_users"`
+	AllowedRoles  string `json:"allowed_roles"`
 	CPUCores      int    `json:"cpu_cores"`
 	TotalRAMMB    int64  `json:"total_ram_mb"`
 }
@@ -70,6 +78,7 @@ func (h *HostHandler) CreateHost(c *gin.Context) {
 		CurrentSessions:        0,
 		Status:                 "init",
 		AgentToken:             agentToken,
+		AgentManaged:           req.AgentManaged,
 		SSHUsername:            req.SSHUsername,
 		SSHPort:                req.SSHPort,
 		SSHAuthType:            req.SSHAuthType,
@@ -77,6 +86,8 @@ func (h *HostHandler) CreateHost(c *gin.Context) {
 		SSHPublicKey:           req.SSHPublicKey,
 		Region:                 req.Region,
 		AZ:                     req.AZ,
+		AllowedUsers:           req.AllowedUsers,
+		AllowedRoles:           req.AllowedRoles,
 		CPUCores:               req.CPUCores,
 		TotalRAMMB:             req.TotalRAMMB,
 	}
@@ -85,6 +96,9 @@ func (h *HostHandler) CreateHost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "宿主机创建失败"})
 		return
 	}
+
+	actorID, _ := c.Get("user_id")
+	services.RecordAudit(fmt.Sprint(actorID), "host_create", "host", host.ID.String(), map[string]interface{}{"hostname": host.Hostname, "ip_address": host.IPAddress}, c.ClientIP())
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message":     "宿主机添加成功",
@@ -121,11 +135,14 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		MaxSessions     int    `json:"max_sessions"`
 		CurrentSessions int    `json:"current_sessions"`
 		Status          string `json:"status"`
+		AgentManaged    bool   `json:"agent_managed"`
 		SSHUsername     string `json:"ssh_username,omitempty"`
 		SSHPort         int    `json:"ssh_port,omitempty"`
 		SSHAuthType     string `json:"ssh_auth_type,omitempty"`
 		Region          string `json:"region"`
 		AZ              string `json:"az"`
+		AllowedUsers    string `json:"allowed_users,omitempty"`
+		AllowedRoles    string `json:"allowed_roles,omitempty"`
 		CPUCores        int    `json:"cpu_cores"`
 		TotalRAMMB      int64  `json:"total_ram_mb"`
 		CreatedAt       string `json:"created_at"`
@@ -141,11 +158,14 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 			MaxSessions:     h.MaxSessions,
 			CurrentSessions: h.CurrentSessions,
 			Status:          h.Status,
+			AgentManaged:    h.AgentManaged,
 			SSHUsername:     h.SSHUsername,
 			SSHPort:         h.SSHPort,
 			SSHAuthType:     h.SSHAuthType,
 			Region:          h.Region,
 			AZ:              h.AZ,
+			AllowedUsers:    h.AllowedUsers,
+			AllowedRoles:    h.AllowedRoles,
 			CPUCores:        h.CPUCores,
 			TotalRAMMB:      h.TotalRAMMB,
 			CreatedAt:       h.CreatedAt.Format("2006-01-02T15:04:05Z"),
@@ -157,6 +177,11 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 
 // ListAvailableDesktopHosts 获取普通用户可选择的桌面运行节点，不暴露 SSH 配置
 func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
+
 	var hosts []models.Host
 	if err := database.DB.
 		Where("status = ? AND current_sessions < max_sessions", "healthy").
@@ -167,18 +192,28 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 	}
 
 	type HostOption struct {
-		ID              string `json:"id"`
-		Hostname        string `json:"hostname"`
-		IPAddress       string `json:"ip_address"`
-		OSType          string `json:"os_type"`
-		MaxSessions     int    `json:"max_sessions"`
-		CurrentSessions int    `json:"current_sessions"`
-		Region          string `json:"region"`
-		AZ              string `json:"az"`
+		ID              string   `json:"id"`
+		Hostname        string   `json:"hostname"`
+		IPAddress       string   `json:"ip_address"`
+		OSType          string   `json:"os_type"`
+		MaxSessions     int      `json:"max_sessions"`
+		CurrentSessions int      `json:"current_sessions"`
+		Region          string   `json:"region"`
+		AZ              string   `json:"az"`
+		CPUCores        int      `json:"cpu_cores"`
+		TotalRAMMB      int64    `json:"total_ram_mb"`
+		Ready           bool     `json:"ready"`
+		UserExists      bool     `json:"current_user_exists"`
+		Missing         []string `json:"missing,omitempty"`
+		AgentManaged    bool     `json:"agent_managed"`
 	}
 
 	resp := make([]HostOption, 0, len(hosts))
 	for _, host := range hosts {
+		if !services.HostAllowsUser(host, usernameStr, roleStr) {
+			continue
+		}
+		readiness := h.readiness.CheckHost(host, usernameStr)
 		resp = append(resp, HostOption{
 			ID:              host.ID.String(),
 			Hostname:        host.Hostname,
@@ -188,10 +223,35 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 			CurrentSessions: host.CurrentSessions,
 			Region:          host.Region,
 			AZ:              host.AZ,
+			CPUCores:        host.CPUCores,
+			TotalRAMMB:      host.TotalRAMMB,
+			Ready:           readiness.Ready,
+			UserExists:      readiness.CurrentUserExists,
+			Missing:         readiness.Missing,
+			AgentManaged:    host.AgentManaged,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"hosts": resp})
+}
+
+// GetHostReadiness 获取宿主机完整就绪诊断（仅管理员）
+func (h *HostHandler) GetHostReadiness(c *gin.Context) {
+	hostID := c.Param("id")
+	username := c.Query("username")
+	if username == "" {
+		if ctxUsername, ok := c.Get("username"); ok {
+			username, _ = ctxUsername.(string)
+		}
+	}
+
+	var host models.Host
+	if err := database.DB.Where("id = ?", hostID).First(&host).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "宿主机不存在"})
+		return
+	}
+
+	c.JSON(http.StatusOK, h.readiness.CheckHost(host, username))
 }
 
 // GetHost 获取单个宿主机详情
@@ -211,10 +271,13 @@ func (h *HostHandler) GetHost(c *gin.Context) {
 		"max_sessions":     host.MaxSessions,
 		"current_sessions": host.CurrentSessions,
 		"status":           host.Status,
+		"agent_managed":    host.AgentManaged,
 		"ssh_username":     host.SSHUsername,
 		"ssh_port":         host.SSHPort,
 		"region":           host.Region,
 		"az":               host.AZ,
+		"allowed_users":    host.AllowedUsers,
+		"allowed_roles":    host.AllowedRoles,
 	})
 }
 
@@ -222,9 +285,12 @@ func (h *HostHandler) GetHost(c *gin.Context) {
 type UpdateHostRequest struct {
 	MaxSessions   *int    `json:"max_sessions,omitempty"`
 	Status        *string `json:"status,omitempty" binding:"omitempty,oneof=healthy full offline maintenance"`
+	AgentManaged  *bool   `json:"agent_managed,omitempty"`
 	SSHUsername   *string `json:"ssh_username,omitempty"`
 	SSHCredential *string `json:"ssh_credential,omitempty"` // 新凭据，加密后更新
 	SSHPublicKey  *string `json:"ssh_public_key,omitempty"`
+	AllowedUsers  *string `json:"allowed_users,omitempty"`
+	AllowedRoles  *string `json:"allowed_roles,omitempty"`
 }
 
 // UpdateHost 更新宿主机配置（仅管理员）
@@ -249,11 +315,20 @@ func (h *HostHandler) UpdateHost(c *gin.Context) {
 	if req.Status != nil {
 		updates["status"] = *req.Status
 	}
+	if req.AgentManaged != nil {
+		updates["agent_managed"] = *req.AgentManaged
+	}
 	if req.SSHUsername != nil {
 		updates["ssh_username"] = *req.SSHUsername
 	}
 	if req.SSHPublicKey != nil {
 		updates["ssh_public_key"] = *req.SSHPublicKey
+	}
+	if req.AllowedUsers != nil {
+		updates["allowed_users"] = *req.AllowedUsers
+	}
+	if req.AllowedRoles != nil {
+		updates["allowed_roles"] = *req.AllowedRoles
 	}
 	if req.SSHCredential != nil && *req.SSHCredential != "" {
 		enc, err := h.encryptor.Encrypt(*req.SSHCredential)
@@ -268,6 +343,9 @@ func (h *HostHandler) UpdateHost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新失败"})
 		return
 	}
+
+	actorID, _ := c.Get("user_id")
+	services.RecordAudit(fmt.Sprint(actorID), "host_update", "host", host.ID.String(), map[string]interface{}{"updated_fields": updates}, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "宿主机更新成功"})
 }
@@ -295,5 +373,7 @@ func (h *HostHandler) DeleteHost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}
+	actorID, _ := c.Get("user_id")
+	services.RecordAudit(fmt.Sprint(actorID), "host_delete", "host", host.ID.String(), map[string]interface{}{"hostname": host.Hostname, "ip_address": host.IPAddress}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "宿主机已删除"})
 }
