@@ -13,6 +13,7 @@ import (
 	"github.com/remote-desktop/master-service/database"
 	"github.com/remote-desktop/master-service/middleware"
 	"github.com/remote-desktop/master-service/models"
+	"github.com/remote-desktop/master-service/services"
 )
 
 type AuthHandler struct {
@@ -97,6 +98,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "用户创建失败"})
 		return
 	}
+	services.RecordAudit(user.ID.String(), "user_register", "user", user.ID.String(), map[string]interface{}{"username": user.Username, "source": user.Source}, c.ClientIP())
 	c.JSON(http.StatusCreated, gin.H{"message": "注册成功", "user": UserInfo{ID: user.ID.String(), Username: user.Username, Role: user.Role, Source: user.Source}})
 }
 
@@ -118,9 +120,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "系统用户同步失败"})
 				return
 			}
+			services.RecordAudit(user.ID.String(), "login_success", "user", user.ID.String(), map[string]interface{}{"username": user.Username, "source": user.Source, "synced_system_user": true}, c.ClientIP())
 			h.issueToken(c, user)
 			return
 		}
+		services.RecordAudit("", "login_failure", "user", "", map[string]interface{}{"username": req.Username, "reason": "invalid_credentials"}, c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -139,14 +143,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			}
 		}
 	default:
+		services.RecordAudit(user.ID.String(), "login_failure", "user", user.ID.String(), map[string]interface{}{"username": user.Username, "reason": "unsupported_source", "source": user.Source}, c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "仅支持本地用户或操作系统用户登录"})
 		return
 	}
 
 	if !authenticated {
+		services.RecordAudit(user.ID.String(), "login_failure", "user", user.ID.String(), map[string]interface{}{"username": user.Username, "reason": "invalid_credentials"}, c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
+	services.RecordAudit(user.ID.String(), "login_success", "user", user.ID.String(), map[string]interface{}{"username": user.Username, "source": user.Source}, c.ClientIP())
 	h.issueToken(c, user)
 }
 

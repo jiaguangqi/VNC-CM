@@ -312,6 +312,15 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	session.Status = models.SessionStatusRunning
 
 	database.DB.Model(&host).Update("current_sessions", gorm.Expr("current_sessions + 1"))
+	services.RecordAudit(uid, "desktop_create", "session", session.ID.String(), map[string]interface{}{
+		"host_id":    host.ID.String(),
+		"host_name":  host.Hostname,
+		"display":    display,
+		"port":       port,
+		"ws_port":    wsPort,
+		"protocol":   session.Protocol,
+		"resolution": session.Resolution,
+	}, c.ClientIP())
 
 	c.JSON(http.StatusCreated, DesktopResponse{
 		ID:             session.ID.String(),
@@ -395,6 +404,7 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 	if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
 		database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
 	}
+	services.RecordAudit(uid, "desktop_close", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String()}, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "桌面会话已关闭"})
 }
@@ -454,6 +464,7 @@ func (h *DesktopHandler) DeleteDesktop(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}
+	services.RecordAudit(uid, "desktop_delete", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String()}, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "桌面记录及宿主机进程已清理"})
 }
@@ -515,6 +526,7 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 		if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
 			database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
 		}
+		services.RecordAudit(uid, "desktop_close", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "batch": true}, c.ClientIP())
 		success = append(success, id)
 	}
 
@@ -581,6 +593,7 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 			failed = append(failed, id)
 			continue
 		}
+		services.RecordAudit(uid, "desktop_delete", "session", session.ID.String(), map[string]interface{}{"previous_status": session.Status, "host_id": session.HostID.String(), "batch": true}, c.ClientIP())
 		success = append(success, id)
 	}
 

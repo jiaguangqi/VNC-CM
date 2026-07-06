@@ -301,6 +301,7 @@ Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockif
 - `credentials` — 加密存储的登录凭证
 - `sessions` — 用户会话与协同会话
 - `file_transfers` — 文件传输记录
+- `audit_logs` — 登录、桌面、节点和协作等关键操作审计记录
 
 ---
 

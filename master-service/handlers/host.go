@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -93,6 +94,9 @@ func (h *HostHandler) CreateHost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "宿主机创建失败"})
 		return
 	}
+
+	actorID, _ := c.Get("user_id")
+	services.RecordAudit(fmt.Sprint(actorID), "host_create", "host", host.ID.String(), map[string]interface{}{"hostname": host.Hostname, "ip_address": host.IPAddress}, c.ClientIP())
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message":     "宿主机添加成功",
@@ -325,6 +329,9 @@ func (h *HostHandler) UpdateHost(c *gin.Context) {
 		return
 	}
 
+	actorID, _ := c.Get("user_id")
+	services.RecordAudit(fmt.Sprint(actorID), "host_update", "host", host.ID.String(), map[string]interface{}{"updated_fields": updates}, c.ClientIP())
+
 	c.JSON(http.StatusOK, gin.H{"message": "宿主机更新成功"})
 }
 
@@ -351,5 +358,7 @@ func (h *HostHandler) DeleteHost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
 		return
 	}
+	actorID, _ := c.Get("user_id")
+	services.RecordAudit(fmt.Sprint(actorID), "host_delete", "host", host.ID.String(), map[string]interface{}{"hostname": host.Hostname, "ip_address": host.IPAddress}, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": "宿主机已删除"})
 }
