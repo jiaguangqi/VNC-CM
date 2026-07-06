@@ -208,6 +208,11 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		return
 	}
 
+	if _, err := services.NewNodeReadinessService(h.encryptor).CheckUserExists(host, linuxUser); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+
 	availableDisplays, err := services.AvailableDisplaysForHost(host.ID, host.MaxSessions)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})

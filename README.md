@@ -260,6 +260,7 @@ Master Service 提供 RESTful API，主要接口：
 | `/api/v1/desktops` | GET | 获取桌面实例列表 |
 | `/api/v1/desktops` | POST | 创建桌面实例 |
 | `/api/v1/desktop-hosts` | GET | 获取可运行桌面的节点列表 |
+| `/api/v1/hosts/:id/readiness` | GET | 获取节点就绪诊断（管理员） |
 | `/api/v1/files/upload` | POST | 文件上传 |
 | `/api/v1/files/download` | GET | 文件下载 |
 | `/health` | GET | 服务健康检查 |
@@ -282,6 +283,8 @@ Master Service 提供 RESTful API，主要接口：
 Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockify 监听端口；如果远端进程不存在或端口不可用，会将会话标记为 `error` 并释放节点会话计数。
 
 创建桌面时，系统会在目标节点上分配最低可用 VNC display，并在启动前检查对应的 VNC 端口和 websockify 端口是否空闲；如果端口已被占用，会自动尝试下一个可用 display。
+
+节点列表会检查 SSH、当前用户、VNC 工具、websockify、noVNC 和桌面环境；用户申请桌面时，未就绪节点或缺少当前系统用户的节点会被禁用。
 
 ### 数据库模型
 

@@ -106,6 +106,7 @@ func main() {
 			admin.POST("/hosts", hostHandler.CreateHost)
 			admin.GET("/hosts", hostHandler.ListHosts)
 			admin.GET("/hosts/:id", hostHandler.GetHost)
+			admin.GET("/hosts/:id/readiness", hostHandler.GetHostReadiness)
 			admin.PATCH("/hosts/:id", hostHandler.UpdateHost)
 			admin.DELETE("/hosts/:id", hostHandler.DeleteHost)
 		}

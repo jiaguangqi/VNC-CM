@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col } from "antd";
+import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col, Empty } from "antd";
 import { PlusOutlined, EyeOutlined, DeleteOutlined, ToolOutlined, ExclamationCircleOutlined, MonitorOutlined, EditOutlined } from "@ant-design/icons";
 import { hostAPI } from "../api";
 
@@ -30,6 +30,9 @@ const HostsPage: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [sshModalOpen, setSshModalOpen] = useState(false);
+  const [readinessModalOpen, setReadinessModalOpen] = useState(false);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessResult, setReadinessResult] = useState<any>(null);
   const [currentHost, setCurrentHost] = useState<HostRecord | null>(null);
 
   const [form] = Form.useForm();
@@ -115,6 +118,21 @@ const HostsPage: React.FC = () => {
   const openWebSSH = async (host: HostRecord) => {
     setCurrentHost(host);
     setSshModalOpen(true);
+  };
+
+  const openReadiness = async (host: HostRecord) => {
+    setCurrentHost(host);
+    setReadinessModalOpen(true);
+    setReadinessLoading(true);
+    setReadinessResult(null);
+    try {
+      const res = await hostAPI.readiness(host.id);
+      setReadinessResult(res.data);
+    } catch (e: any) {
+      message.error(e.response?.data?.error || "诊断失败");
+    } finally {
+      setReadinessLoading(false);
+    }
   };
 
   const statusColorMap: Record<string, string> = {
@@ -214,6 +232,9 @@ const HostsPage: React.FC = () => {
           </Button>
           <Button icon={<EyeOutlined />} size="small" onClick={() => { setCurrentHost(record); setDetailModalOpen(true); }}>
             详情
+          </Button>
+          <Button icon={<ToolOutlined />} size="small" onClick={() => openReadiness(record)}>
+            诊断
           </Button>
           <Button icon={<EditOutlined />} size="small" onClick={() => openEditModal(record)}>
             编辑
@@ -373,6 +394,39 @@ const HostsPage: React.FC = () => {
                 : "无"}
             </Descriptions.Item>
           </Descriptions>
+        )}
+      </Modal>
+
+      <Modal
+        title={`节点就绪诊断 - ${currentHost?.hostname || ""}`}
+        open={readinessModalOpen}
+        onCancel={() => setReadinessModalOpen(false)}
+        width={720}
+        footer={[
+          <Button key="close" onClick={() => setReadinessModalOpen(false)}>关闭</Button>,
+        ]}
+      >
+        {readinessLoading ? (
+          <Alert type="info" showIcon message="正在检查节点就绪状态..." />
+        ) : readinessResult ? (
+          <Space direction="vertical" style={{ width: "100%" }} size="middle">
+            <Alert
+              type={readinessResult.ready ? "success" : "warning"}
+              showIcon
+              message={readinessResult.ready ? "节点已就绪" : "节点未完全就绪"}
+              description={readinessResult.missing?.length ? `缺失项：${readinessResult.missing.join(", ")}` : "所有关键检查通过"}
+            />
+            <Descriptions bordered column={1} size="small">
+              {(readinessResult.checks || []).map((check: any) => (
+                <Descriptions.Item key={check.name} label={check.name}>
+                  <Tag color={check.ok ? "green" : "red"}>{check.ok ? "通过" : "失败"}</Tag>
+                  {check.message || ""}
+                </Descriptions.Item>
+              ))}
+            </Descriptions>
+          </Space>
+        ) : (
+          <Empty description="暂无诊断结果" />
         )}
       </Modal>
 

@@ -40,6 +40,7 @@ export const hostAPI = {
   list: (params?: { status?: string; region?: string }) => api.get('/hosts', { params }),
   listDesktopHosts: () => api.get('/desktop-hosts'),
   get: (id: string) => api.get(`/hosts/${id}`),
+  readiness: (id: string, username?: string) => api.get(`/hosts/${id}/readiness`, { params: username ? { username } : undefined }),
   create: (data: any) => api.post('/hosts', data),
   update: (id: string, data: any) => api.patch(`/hosts/${id}`, data),
   delete: (id: string) => api.delete(`/hosts/${id}`),

@@ -16,11 +16,15 @@ import (
 // HostHandler 宿主机处理器
 type HostHandler struct {
 	encryptor *services.EncryptionService
+	readiness *services.NodeReadinessService
 }
 
 // NewHostHandler 创建宿主机处理器
 func NewHostHandler(encryptor *services.EncryptionService) *HostHandler {
-	return &HostHandler{encryptor: encryptor}
+	return &HostHandler{
+		encryptor: encryptor,
+		readiness: services.NewNodeReadinessService(encryptor),
+	}
 }
 
 // CreateHostRequest 添加宿主机请求
@@ -157,6 +161,9 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 
 // ListAvailableDesktopHosts 获取普通用户可选择的桌面运行节点，不暴露 SSH 配置
 func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
+	username, _ := c.Get("username")
+	usernameStr, _ := username.(string)
+
 	var hosts []models.Host
 	if err := database.DB.
 		Where("status = ? AND current_sessions < max_sessions", "healthy").
@@ -167,18 +174,22 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 	}
 
 	type HostOption struct {
-		ID              string `json:"id"`
-		Hostname        string `json:"hostname"`
-		IPAddress       string `json:"ip_address"`
-		OSType          string `json:"os_type"`
-		MaxSessions     int    `json:"max_sessions"`
-		CurrentSessions int    `json:"current_sessions"`
-		Region          string `json:"region"`
-		AZ              string `json:"az"`
+		ID              string   `json:"id"`
+		Hostname        string   `json:"hostname"`
+		IPAddress       string   `json:"ip_address"`
+		OSType          string   `json:"os_type"`
+		MaxSessions     int      `json:"max_sessions"`
+		CurrentSessions int      `json:"current_sessions"`
+		Region          string   `json:"region"`
+		AZ              string   `json:"az"`
+		Ready           bool     `json:"ready"`
+		UserExists      bool     `json:"current_user_exists"`
+		Missing         []string `json:"missing,omitempty"`
 	}
 
 	resp := make([]HostOption, 0, len(hosts))
 	for _, host := range hosts {
+		readiness := h.readiness.CheckHost(host, usernameStr)
 		resp = append(resp, HostOption{
 			ID:              host.ID.String(),
 			Hostname:        host.Hostname,
@@ -188,10 +199,32 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 			CurrentSessions: host.CurrentSessions,
 			Region:          host.Region,
 			AZ:              host.AZ,
+			Ready:           readiness.Ready,
+			UserExists:      readiness.CurrentUserExists,
+			Missing:         readiness.Missing,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"hosts": resp})
+}
+
+// GetHostReadiness 获取宿主机完整就绪诊断（仅管理员）
+func (h *HostHandler) GetHostReadiness(c *gin.Context) {
+	hostID := c.Param("id")
+	username := c.Query("username")
+	if username == "" {
+		if ctxUsername, ok := c.Get("username"); ok {
+			username, _ = ctxUsername.(string)
+		}
+	}
+
+	var host models.Host
+	if err := database.DB.Where("id = ?", hostID).First(&host).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "宿主机不存在"})
+		return
+	}
+
+	c.JSON(http.StatusOK, h.readiness.CheckHost(host, username))
 }
 
 // GetHost 获取单个宿主机详情

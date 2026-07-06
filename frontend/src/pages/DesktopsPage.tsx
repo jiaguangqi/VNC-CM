@@ -76,6 +76,9 @@ interface HostOption {
   status: string;
   current_sessions: number;
   max_sessions: number;
+  ready: boolean;
+  current_user_exists: boolean;
+  missing?: string[];
 }
 
 type ViewMode = "list" | "grid";
@@ -972,8 +975,13 @@ const fetchDesktops = async () => {
             <Select placeholder="请选择运行节点">
               <Select.Option value="auto">自动调度（推荐）</Select.Option>
               {availableHosts.map((host) => (
-                <Select.Option key={host.id} value={host.id}>
+                <Select.Option
+                  key={host.id}
+                  value={host.id}
+                  disabled={!host.ready || !host.current_user_exists}
+                >
                   {host.hostname} · {host.ip_address}（{host.current_sessions}/{host.max_sessions}）
+                  {!host.current_user_exists ? " · 当前用户不存在" : !host.ready ? " · 节点未就绪" : ""}
                 </Select.Option>
               ))}
             </Select>
