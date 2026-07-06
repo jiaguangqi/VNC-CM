@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col, Empty } from "antd";
+import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col, Empty, Checkbox } from "antd";
 import { PlusOutlined, EyeOutlined, DeleteOutlined, ToolOutlined, ExclamationCircleOutlined, MonitorOutlined, EditOutlined } from "@ant-design/icons";
 import { hostAPI } from "../api";
 
@@ -11,6 +11,7 @@ interface HostRecord {
   max_sessions: number;
   current_sessions: number;
   status: string;
+  agent_managed: boolean;
   ssh_username: string;
   ssh_port: number;
   cpu_cores: number;
@@ -155,6 +156,7 @@ const HostsPage: React.FC = () => {
     try {
       await hostAPI.update(currentHost.id, {
         max_sessions: parseInt(values.max_sessions),
+        agent_managed: !!values.agent_managed,
         allowed_users: values.allowed_users || "",
         allowed_roles: values.allowed_roles || "",
       });
@@ -174,6 +176,7 @@ const HostsPage: React.FC = () => {
       ip_address: host.ip_address,
       os_type: host.os_type,
       max_sessions: host.max_sessions,
+      agent_managed: !!host.agent_managed,
       allowed_users: host.allowed_users || "",
       allowed_roles: host.allowed_roles || "",
     });
@@ -219,6 +222,15 @@ const HostsPage: React.FC = () => {
         <Tag color={statusColorMap[status] || "default"}>{status?.toUpperCase()}</Tag>
       ),
     },
+    {
+      title: "管理方式",
+      dataIndex: "agent_managed",
+      key: "agent_managed",
+      width: 110,
+      render: (managed: boolean) => (
+        <Tag color={managed ? "purple" : "default"}>{managed ? "Agent" : "SSH"}</Tag>
+      ),
+    },
     { title: "区域", dataIndex: "region", key: "region", width: 100 },
     {
       title: "心跳",
@@ -239,7 +251,12 @@ const HostsPage: React.FC = () => {
       width: 280,
       render: (_: any, record: HostRecord) => (
         <Space>
-          <Button icon={<MonitorOutlined />} size="small" onClick={() => openWebSSH(record)}>
+          <Button
+            icon={<MonitorOutlined />}
+            size="small"
+            onClick={() => openWebSSH(record)}
+            disabled={record.agent_managed && !record.ssh_username}
+          >
             WebSSH
           </Button>
           <Button icon={<EyeOutlined />} size="small" onClick={() => { setCurrentHost(record); setDetailModalOpen(true); }}>
@@ -354,6 +371,9 @@ const HostsPage: React.FC = () => {
           <Form.Item name="max_sessions" label="最大并发桌面数" rules={[{ required: true }]}>
             <Input type="number" placeholder="10" />
           </Form.Item>
+          <Form.Item name="agent_managed" valuePropName="checked" initialValue={false}>
+            <Checkbox>Agent 托管节点（SSH 凭据仅作为回退，可不填写）</Checkbox>
+          </Form.Item>
           <Form.Item name="ssh_username" label="SSH 用户名">
             <Input placeholder="root" />
           </Form.Item>
@@ -390,6 +410,11 @@ const HostsPage: React.FC = () => {
             <Descriptions.Item label="状态">
               <Tag color={statusColorMap[currentHost.status] || "default"}>
                 {currentHost.status?.toUpperCase()}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="管理方式">
+              <Tag color={currentHost.agent_managed ? "purple" : "default"}>
+                {currentHost.agent_managed ? "Agent 托管" : "SSH 回退"}
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="CPU 核心">{currentHost.cpu_cores || "-"}</Descriptions.Item>
@@ -497,6 +522,9 @@ const HostsPage: React.FC = () => {
             ]}
           >
             <Input type="number" placeholder="如：10" />
+          </Form.Item>
+          <Form.Item name="agent_managed" valuePropName="checked">
+            <Checkbox>Agent 托管节点（SSH 凭据仅作为回退，可不填写）</Checkbox>
           </Form.Item>
           <Form.Item name="allowed_users" label="允许用户">
             <Input placeholder="留空表示不限；多个用户用英文逗号分隔" />

@@ -225,7 +225,12 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		host = candidates[rand.Intn(len(candidates))]
 	}
 
-	if host.SSHUsername == "" || host.SSHCredentialEncrypted == "" {
+	if host.AgentManaged && !h.isHostAgentOnline(host) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "宿主机由 Agent 托管，但 Host Agent 当前未在线"})
+		return
+	}
+
+	if !host.AgentManaged && !hostSupportsSSH(host) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "宿主机 SSH 凭据未配置，无法创建桌面"})
 		return
 	}
@@ -407,8 +412,16 @@ func sessionDisplayAndWSPort(session models.Session) (int, int) {
 	return display, wsPort
 }
 
+func hostSupportsSSH(host models.Host) bool {
+	return host.SSHUsername != "" && host.SSHCredentialEncrypted != ""
+}
+
+func (h *DesktopHandler) isHostAgentOnline(host models.Host) bool {
+	return h.agentServer != nil && h.agentServer.IsHostOnline(host.ID.String())
+}
+
 func (h *DesktopHandler) dispatchCreateToAgentIfOnline(host models.Host, session models.Session, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) bool {
-	if h.agentServer == nil || !h.agentServer.IsHostOnline(host.ID.String()) {
+	if !h.isHostAgentOnline(host) {
 		return false
 	}
 
@@ -507,6 +520,12 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 		return
 	}
 
+	if !hostSupportsSSH(session.Host) {
+		database.DB.Model(&session).Update("status", previousStatus)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Host Agent 未在线，且宿主机未配置 SSH 回退，无法关闭桌面"})
+		return
+	}
+
 	if display > 0 {
 		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 	}
@@ -558,8 +577,13 @@ func (h *DesktopHandler) DeleteDesktop(c *gin.Context) {
 	if models.IsTerminalSessionStatus(previousStatus) {
 		_ = h.dispatchTerminateToAgentIfOnline(session, display, wsPort)
 	}
-	if display > 0 && session.Host.ID != uuid.Nil {
+	if display > 0 && session.Host.ID != uuid.Nil && hostSupportsSSH(session.Host) {
 		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+	}
+	if !models.IsTerminalSessionStatus(previousStatus) && !hostSupportsSSH(session.Host) {
+		database.DB.Model(&session).Update("status", previousStatus)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Host Agent 未在线，且宿主机未配置 SSH 回退，无法清理桌面"})
+		return
 	}
 
 	decrementHostSessionIfRunning(session.Host, previousStatus)
@@ -617,6 +641,12 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 			continue
 		}
 
+		if !hostSupportsSSH(session.Host) {
+			database.DB.Model(&session).Update("status", previousStatus)
+			failed = append(failed, id)
+			continue
+		}
+
 		if display > 0 {
 			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}
@@ -671,7 +701,7 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 		// 清理宿主机残留
 		display, wsPort := sessionDisplayAndWSPort(session)
 		_ = h.dispatchTerminateToAgentIfOnline(session, display, wsPort)
-		if display > 0 && session.Host.ID != uuid.Nil {
+		if display > 0 && session.Host.ID != uuid.Nil && hostSupportsSSH(session.Host) {
 			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}
 
@@ -696,6 +726,9 @@ func (h *DesktopHandler) selectAvailableDisplayAndPorts(host models.Host, displa
 	for _, display := range displays {
 		port := 5900 + display
 		wsPort := 6100 + display
+		if host.AgentManaged && !hostSupportsSSH(host) {
+			return display, port, wsPort, nil
+		}
 		if err := h.ensureRemotePortsFree(host, port, wsPort); err == nil {
 			return display, port, wsPort, nil
 		}

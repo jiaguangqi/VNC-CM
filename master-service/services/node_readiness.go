@@ -38,6 +38,12 @@ func (s *NodeReadinessService) CheckHost(host models.Host, username string) Node
 		CheckedAt: time.Now().UTC(),
 	}
 
+	if host.AgentManaged && (host.SSHUsername == "" || host.SSHCredentialEncrypted == "") {
+		result.CurrentUserExists = true
+		result.addCheck("agent_managed", true, "SSH 未配置；桌面创建时由 Host Agent 在本机校验用户和组件")
+		return result
+	}
+
 	client, err := s.dialHost(host)
 	if err != nil {
 		result.Ready = false
@@ -81,6 +87,10 @@ func (s *NodeReadinessService) CheckHost(host models.Host, username string) Node
 }
 
 func (s *NodeReadinessService) CheckUserExists(host models.Host, username string) (bool, error) {
+	if host.AgentManaged && (host.SSHUsername == "" || host.SSHCredentialEncrypted == "") {
+		return true, nil
+	}
+
 	client, err := s.dialHost(host)
 	if err != nil {
 		return false, err

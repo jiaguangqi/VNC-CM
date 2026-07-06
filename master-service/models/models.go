@@ -40,6 +40,7 @@ type Host struct {
 	CurrentSessions        int            `gorm:"not null;default:0" json:"current_sessions"`
 	Status                 string         `gorm:"size:16;not null;default:'init'" json:"status"` // init, healthy, full, offline, maintenance
 	AgentToken             string         `gorm:"size:256;uniqueIndex" json:"-"`                 // Host Agent mTLS 认证 Token
+	AgentManaged           bool           `gorm:"not null;default:false" json:"agent_managed"`   // true 时桌面生命周期由 Host Agent 管理，SSH 为可选回退
 	SSHUsername            string         `gorm:"size:64" json:"ssh_username"`
 	SSHPort                int            `gorm:"default:22" json:"ssh_port"`
 	SSHAuthType            string         `gorm:"size:16" json:"ssh_auth_type"`              // password, key

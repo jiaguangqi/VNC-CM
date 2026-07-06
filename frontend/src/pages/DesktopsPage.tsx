@@ -78,6 +78,7 @@ interface HostOption {
   max_sessions: number;
   ready: boolean;
   current_user_exists: boolean;
+  agent_managed?: boolean;
   missing?: string[];
 }
 
@@ -980,7 +981,7 @@ const fetchDesktops = async () => {
                   value={host.id}
                   disabled={!host.ready || !host.current_user_exists}
                 >
-                  {host.hostname} · {host.ip_address}（{host.current_sessions}/{host.max_sessions}）
+                  {host.hostname} · {host.ip_address} · {host.agent_managed ? "Agent" : "SSH"}（{host.current_sessions}/{host.max_sessions}）
                   {!host.current_user_exists ? " · 当前用户不存在" : !host.ready ? " · 节点未就绪" : ""}
                 </Select.Option>
               ))}

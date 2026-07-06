@@ -294,6 +294,11 @@ Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockif
 
 管理员可以为节点配置 `allowed_users` 和 `allowed_roles` 访问策略，使用英文逗号分隔；两者都为空表示该节点不限制用户或角色。
 
+节点支持两种管理方式：
+
+- SSH 回退节点：需要配置 SSH 用户和密码或私钥，Master 会通过 SSH 做端口预检、启动/停止回退和健康检查。
+- Agent 托管节点：勾选 `agent_managed` 后，VNC 启停优先由 Host Agent 在节点本机执行；SSH 凭据可不填写，但 Host Agent 必须在线，用户与桌面组件会在创建桌面时由 Agent 本地校验。
+
 ### 数据库模型
 
 核心数据表：

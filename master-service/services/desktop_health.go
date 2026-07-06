@@ -65,6 +65,10 @@ func (m *DesktopHealthMonitor) reconcileRunningSessions() {
 	}
 
 	for _, session := range sessions {
+		if session.Host.AgentManaged && (session.Host.SSHUsername == "" || session.Host.SSHCredentialEncrypted == "") {
+			continue
+		}
+
 		display, wsPort, err := sessionDisplayAndWSPort(session)
 		if err != nil {
 			m.markSessionError(session, fmt.Sprintf("连接信息无效: %v", err))
@@ -96,13 +100,19 @@ func sessionDisplayAndWSPort(session models.Session) (int, int, error) {
 		return 0, 0, fmt.Errorf("display 无效")
 	}
 
-	portValue, ok := connInfo["port"]
+	portValue, ok := connInfo["ws_port"]
 	if !ok {
-		return 0, 0, fmt.Errorf("缺少 port")
+		portValue, ok = connInfo["port"]
+		if !ok {
+			return 0, 0, fmt.Errorf("缺少 port")
+		}
 	}
 	port, ok := numericJSONValueToInt(portValue)
 	if !ok || port <= 0 {
 		return 0, 0, fmt.Errorf("port 无效")
+	}
+	if _, hasWSPort := connInfo["ws_port"]; hasWSPort {
+		return display, port, nil
 	}
 
 	return display, port + 200, nil

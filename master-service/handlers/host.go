@@ -34,6 +34,7 @@ type CreateHostRequest struct {
 	IPAddress     string `json:"ip_address" binding:"required,ip"`
 	OSType        string `json:"os_type" binding:"required,oneof=linux windows"`
 	MaxSessions   int    `json:"max_sessions" binding:"required,min=1,max=1000"`
+	AgentManaged  bool   `json:"agent_managed"`
 	SSHUsername   string `json:"ssh_username"`
 	SSHPort       int    `json:"ssh_port" binding:"min=1,max=65535"`
 	SSHAuthType   string `json:"ssh_auth_type" binding:"oneof=password key"`
@@ -77,6 +78,7 @@ func (h *HostHandler) CreateHost(c *gin.Context) {
 		CurrentSessions:        0,
 		Status:                 "init",
 		AgentToken:             agentToken,
+		AgentManaged:           req.AgentManaged,
 		SSHUsername:            req.SSHUsername,
 		SSHPort:                req.SSHPort,
 		SSHAuthType:            req.SSHAuthType,
@@ -133,6 +135,7 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		MaxSessions     int    `json:"max_sessions"`
 		CurrentSessions int    `json:"current_sessions"`
 		Status          string `json:"status"`
+		AgentManaged    bool   `json:"agent_managed"`
 		SSHUsername     string `json:"ssh_username,omitempty"`
 		SSHPort         int    `json:"ssh_port,omitempty"`
 		SSHAuthType     string `json:"ssh_auth_type,omitempty"`
@@ -155,6 +158,7 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 			MaxSessions:     h.MaxSessions,
 			CurrentSessions: h.CurrentSessions,
 			Status:          h.Status,
+			AgentManaged:    h.AgentManaged,
 			SSHUsername:     h.SSHUsername,
 			SSHPort:         h.SSHPort,
 			SSHAuthType:     h.SSHAuthType,
@@ -199,6 +203,7 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 		Ready           bool     `json:"ready"`
 		UserExists      bool     `json:"current_user_exists"`
 		Missing         []string `json:"missing,omitempty"`
+		AgentManaged    bool     `json:"agent_managed"`
 	}
 
 	resp := make([]HostOption, 0, len(hosts))
@@ -219,6 +224,7 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 			Ready:           readiness.Ready,
 			UserExists:      readiness.CurrentUserExists,
 			Missing:         readiness.Missing,
+			AgentManaged:    host.AgentManaged,
 		})
 	}
 
@@ -261,6 +267,7 @@ func (h *HostHandler) GetHost(c *gin.Context) {
 		"max_sessions":     host.MaxSessions,
 		"current_sessions": host.CurrentSessions,
 		"status":           host.Status,
+		"agent_managed":    host.AgentManaged,
 		"ssh_username":     host.SSHUsername,
 		"ssh_port":         host.SSHPort,
 		"region":           host.Region,
@@ -274,6 +281,7 @@ func (h *HostHandler) GetHost(c *gin.Context) {
 type UpdateHostRequest struct {
 	MaxSessions   *int    `json:"max_sessions,omitempty"`
 	Status        *string `json:"status,omitempty" binding:"omitempty,oneof=healthy full offline maintenance"`
+	AgentManaged  *bool   `json:"agent_managed,omitempty"`
 	SSHUsername   *string `json:"ssh_username,omitempty"`
 	SSHCredential *string `json:"ssh_credential,omitempty"` // 新凭据，加密后更新
 	SSHPublicKey  *string `json:"ssh_public_key,omitempty"`
@@ -302,6 +310,9 @@ func (h *HostHandler) UpdateHost(c *gin.Context) {
 	}
 	if req.Status != nil {
 		updates["status"] = *req.Status
+	}
+	if req.AgentManaged != nil {
+		updates["agent_managed"] = *req.AgentManaged
 	}
 	if req.SSHUsername != nil {
 		updates["ssh_username"] = *req.SSHUsername
