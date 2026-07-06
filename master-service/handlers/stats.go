@@ -21,12 +21,22 @@ func NewStatsHandler() *StatsHandler {
 
 // OverviewResponse 概览统计响应
 type OverviewResponse struct {
-	TotalDesktops   int64 `json:"total_desktops"`    // 在线桌面数
-	TotalHosts      int64 `json:"total_hosts"`       // 在线主机数
-	ActiveUsers     int64 `json:"active_users"`      // 最近7天活跃用户
-	DesktopWeekPrev int   `json:"desktop_week_prev"` // 上周桌面数（环比）
-	HostWeekPrev    int   `json:"host_week_prev"`    // 上周主机数（环比）
-	UserWeekPrev    int   `json:"user_week_prev"`    // 上周用户数（环比）
+	TotalDesktops        int64                  `json:"total_desktops"`    // 在线桌面数
+	TotalHosts           int64                  `json:"total_hosts"`       // 在线主机数
+	ActiveUsers          int64                  `json:"active_users"`      // 最近7天活跃用户
+	DesktopWeekPrev      int                    `json:"desktop_week_prev"` // 上周桌面数（环比）
+	HostWeekPrev         int                    `json:"host_week_prev"`    // 上周主机数（环比）
+	UserWeekPrev         int                    `json:"user_week_prev"`    // 上周用户数（环比）
+	TopBandwidthSessions []BandwidthSessionInfo `json:"top_bandwidth_sessions"`
+}
+
+type BandwidthSessionInfo struct {
+	ID                  string `json:"id"`
+	Username            string `json:"username"`
+	HostName            string `json:"host_name"`
+	CurrentBandwidthBps int64  `json:"current_bandwidth_bps"`
+	PeakBandwidthBps    int64  `json:"peak_bandwidth_bps"`
+	TotalNetworkBytes   int64  `json:"total_network_bytes"`
 }
 
 // GetOverview 获取概览统计数据
@@ -76,6 +86,26 @@ func (h *StatsHandler) GetOverview(c *gin.Context) {
 		Distinct("user_id").
 		Count(&prevUsers)
 	resp.UserWeekPrev = int(prevUsers)
+
+	var topSessions []models.Session
+	db.Model(&models.Session{}).
+		Preload("User").
+		Preload("Host").
+		Where("status = ?", models.SessionStatusRunning).
+		Where("current_bandwidth_bps > 0 OR peak_bandwidth_bps > 0").
+		Order("current_bandwidth_bps DESC, peak_bandwidth_bps DESC").
+		Limit(5).
+		Find(&topSessions)
+	for _, session := range topSessions {
+		resp.TopBandwidthSessions = append(resp.TopBandwidthSessions, BandwidthSessionInfo{
+			ID:                  session.ID.String(),
+			Username:            session.User.Username,
+			HostName:            session.Host.Hostname,
+			CurrentBandwidthBps: session.CurrentBandwidthBps,
+			PeakBandwidthBps:    session.PeakBandwidthBps,
+			TotalNetworkBytes:   session.TotalNetworkBytes,
+		})
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",

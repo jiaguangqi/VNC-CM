@@ -53,6 +53,9 @@ interface DesktopSession {
   protocol: string;
   resolution: string;
   performance_profile?: string;
+  current_bandwidth_bps?: number;
+  peak_bandwidth_bps?: number;
+  total_network_bytes?: number;
   status: string;
   username?: string;
   host_id: string;
@@ -133,6 +136,15 @@ const DesktopsPage: React.FC = () => {
     if (!mb) return "-";
     return `${(mb / 1024).toFixed(1)}G`;
   };
+
+  const formatBandwidth = (bps?: number) => {
+    if (!bps || bps <= 0) return "0 bps";
+    if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+    if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} Kbps`;
+    return `${Math.round(bps)} bps`;
+  };
+
+  const highRecentBandwidth = desktops.some((desktop) => (desktop.current_bandwidth_bps || 0) > 5_000_000);
 
   const hostDisabledReason = (host: HostOption) => {
     if (!host.current_user_exists) return "当前用户不存在";
@@ -679,6 +691,8 @@ const fetchDesktops = async () => {
             <div><Text type="secondary">协议:</Text> {desktop.protocol.toUpperCase()}</div>
             <div><Text type="secondary">分辨率:</Text> {desktop.resolution}</div>
             <div><Text type="secondary">档位:</Text> {profileText(desktop.performance_profile)}</div>
+            <div><Text type="secondary">当前带宽:</Text> {formatBandwidth(desktop.current_bandwidth_bps)}</div>
+            <div><Text type="secondary">峰值带宽:</Text> {formatBandwidth(desktop.peak_bandwidth_bps)}</div>
             <div><Text type="secondary">端口:</Text> {desktop.port}</div>
             <div><Text type="secondary">IP:</Text> <span style={{ overflowWrap: "anywhere" }}>{desktop.host_ip}</span></div>
           </div>
@@ -1113,6 +1127,32 @@ const fetchDesktops = async () => {
               <Select.Option value={16}>16-bit (高彩色)</Select.Option>
               <Select.Option value={8}>8-bit (256色)</Select.Option>
             </Select>
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldValue }) => {
+              const profile = getFieldValue("performance_profile") || "balanced";
+              const resolution = getFieldValue("resolution") || "";
+              const colorDepth = getFieldValue("color_depth") || 24;
+              const desktopEnv = getFieldValue("desktop_env") || "gnome";
+              const selectedHost = availableHosts.find((host) => host.id === getFieldValue("host_id"));
+              const reasons: string[] = [];
+              if (profile === "quality") reasons.push("画质优先会提高持续带宽占用");
+              if (resolution === "1920x1080") reasons.push("高分辨率会增加画面刷新数据量");
+              if (colorDepth === 24) reasons.push("24-bit 色深比 16-bit 更耗带宽");
+              if (desktopEnv === "gnome") reasons.push("GNOME 动画和合成效果可能带来额外刷新");
+              if (selectedHost?.region && selectedHost.region !== "local") reasons.push("非本地区域节点可能受跨地域链路影响");
+              if (highRecentBandwidth) reasons.push("近期已有会话带宽较高");
+              if (profile === "low_bandwidth" || reasons.length === 0) return null;
+              return (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="建议使用低带宽档位"
+                  description={`${reasons.join("；")}。可以切换到低带宽档位，或手动选择 1280x720、16-bit、XFCE。`}
+                />
+              );
+            }}
           </Form.Item>
         </Form>
       </Modal>

@@ -59,6 +59,18 @@ type DesktopUpdatePayload struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type SessionBandwidthReportPayload struct {
+	Sessions []SessionBandwidthSample `json:"sessions"`
+}
+
+type SessionBandwidthSample struct {
+	SessionID    string `json:"session_id"`
+	CurrentBps   int64  `json:"current_bps"`
+	PeakBps      int64  `json:"peak_bps"`
+	TotalBytes   uint64 `json:"total_bytes"`
+	SampledAtUTC string `json:"sampled_at"`
+}
+
 // MasterInstruction Master 下发的指令
 type MasterInstruction struct {
 	InstructionID string          `json:"instruction_id"`
@@ -223,6 +235,36 @@ func (s *HostAgentServer) handleAgentMessage(hostID string, msg *AgentMessage) {
 	case "desktop_update":
 		log.Printf("桌面更新 host_id=%s payload=%s", hostID, string(msg.Payload))
 		s.updateDesktopStatus(hostID, msg.Payload)
+
+	case "session_bandwidth":
+		s.updateSessionBandwidth(hostID, msg.Payload)
+	}
+}
+
+func (s *HostAgentServer) updateSessionBandwidth(hostID string, payload json.RawMessage) {
+	var report SessionBandwidthReportPayload
+	if err := json.Unmarshal(payload, &report); err != nil {
+		log.Printf("带宽报告解析失败 host_id=%s: %v", hostID, err)
+		return
+	}
+
+	for _, sample := range report.Sessions {
+		sampledAt := time.Now().UTC()
+		if sample.SampledAtUTC != "" {
+			if parsed, err := time.Parse(time.RFC3339, sample.SampledAtUTC); err == nil {
+				sampledAt = parsed
+			}
+		}
+		if err := database.DB.Model(&models.Session{}).
+			Where("id = ? AND host_id = ?", sample.SessionID, hostID).
+			Updates(map[string]interface{}{
+				"current_bandwidth_bps": sample.CurrentBps,
+				"peak_bandwidth_bps":    gorm.Expr("GREATEST(peak_bandwidth_bps, ?)", sample.PeakBps),
+				"total_network_bytes":   int64(sample.TotalBytes),
+				"last_bandwidth_at":     sampledAt,
+			}).Error; err != nil {
+			log.Printf("更新会话带宽失败 session=%s: %v", sample.SessionID, err)
+		}
 	}
 }
 

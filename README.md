@@ -311,6 +311,8 @@ Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockif
 
 低带宽档位不会强制覆盖用户后续手动选择；如果用户明确改回 GNOME 或更高分辨率，系统会按用户选择创建，但前端会保留带宽影响提示。
 
+Host Agent 会对自己启动的 VNC 会话按 websockify 端口采样 socket 字节，Master 会记录当前带宽、峰值带宽和累计网络字节，并在桌面列表与仪表盘 Top 会话中展示。该指标是 Agent 可识别路径下的 best-effort 观测；SSH 回退启动且无法安全归属端口的会话不会伪造带宽数据。
+
 ### 数据库模型
 
 核心数据表：

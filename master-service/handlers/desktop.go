@@ -45,20 +45,23 @@ type CreateDesktopRequest struct {
 }
 
 type DesktopResponse struct {
-	ID                 string                 `json:"id"`
-	Protocol           string                 `json:"protocol"`
-	VncBackend         string                 `json:"vnc_backend,omitempty"`
-	Resolution         string                 `json:"resolution"`
-	PerformanceProfile string                 `json:"performance_profile,omitempty"`
-	Status             string                 `json:"status"`
-	Username           string                 `json:"username,omitempty"`
-	HostID             string                 `json:"host_id"`
-	HostIP             string                 `json:"host_ip"`
-	HostName           string                 `json:"host_name"`
-	Port               int                    `json:"port"`
-	VncPassword        string                 `json:"vnc_password,omitempty"`
-	ConnectionInfo     map[string]interface{} `json:"connection_info,omitempty"`
-	CreatedAt          time.Time              `json:"created_at"`
+	ID                  string                 `json:"id"`
+	Protocol            string                 `json:"protocol"`
+	VncBackend          string                 `json:"vnc_backend,omitempty"`
+	Resolution          string                 `json:"resolution"`
+	PerformanceProfile  string                 `json:"performance_profile,omitempty"`
+	CurrentBandwidthBps int64                  `json:"current_bandwidth_bps"`
+	PeakBandwidthBps    int64                  `json:"peak_bandwidth_bps"`
+	TotalNetworkBytes   int64                  `json:"total_network_bytes"`
+	Status              string                 `json:"status"`
+	Username            string                 `json:"username,omitempty"`
+	HostID              string                 `json:"host_id"`
+	HostIP              string                 `json:"host_ip"`
+	HostName            string                 `json:"host_name"`
+	Port                int                    `json:"port"`
+	VncPassword         string                 `json:"vnc_password,omitempty"`
+	ConnectionInfo      map[string]interface{} `json:"connection_info,omitempty"`
+	CreatedAt           time.Time              `json:"created_at"`
 }
 
 func (h *DesktopHandler) ListDesktops(c *gin.Context) {
@@ -88,13 +91,16 @@ func (h *DesktopHandler) ListDesktops(c *gin.Context) {
 	result := make([]DesktopResponse, 0)
 	for _, s := range sessions {
 		dr := DesktopResponse{
-			ID:                 s.ID.String(),
-			Protocol:           s.Protocol,
-			Resolution:         s.Resolution,
-			PerformanceProfile: s.PerformanceProfile,
-			Status:             s.Status,
-			HostID:             s.HostID.String(),
-			CreatedAt:          s.CreatedAt,
+			ID:                  s.ID.String(),
+			Protocol:            s.Protocol,
+			Resolution:          s.Resolution,
+			PerformanceProfile:  s.PerformanceProfile,
+			CurrentBandwidthBps: s.CurrentBandwidthBps,
+			PeakBandwidthBps:    s.PeakBandwidthBps,
+			TotalNetworkBytes:   s.TotalNetworkBytes,
+			Status:              s.Status,
+			HostID:              s.HostID.String(),
+			CreatedAt:           s.CreatedAt,
 		}
 		if roleStr == "admin" && s.User.ID != uuid.Nil {
 			dr.Username = s.User.Username
@@ -136,15 +142,18 @@ func (h *DesktopHandler) GetDesktopDetail(c *gin.Context) {
 	}
 
 	dr := DesktopResponse{
-		ID:                 session.ID.String(),
-		Protocol:           session.Protocol,
-		Resolution:         session.Resolution,
-		PerformanceProfile: session.PerformanceProfile,
-		Status:             session.Status,
-		HostID:             session.HostID.String(),
-		HostIP:             session.Host.IPAddress,
-		HostName:           session.Host.Hostname,
-		CreatedAt:          session.CreatedAt,
+		ID:                  session.ID.String(),
+		Protocol:            session.Protocol,
+		Resolution:          session.Resolution,
+		PerformanceProfile:  session.PerformanceProfile,
+		CurrentBandwidthBps: session.CurrentBandwidthBps,
+		PeakBandwidthBps:    session.PeakBandwidthBps,
+		TotalNetworkBytes:   session.TotalNetworkBytes,
+		Status:              session.Status,
+		HostID:              session.HostID.String(),
+		HostIP:              session.Host.IPAddress,
+		HostName:            session.Host.Hostname,
+		CreatedAt:           session.CreatedAt,
 	}
 
 	if session.ConnectionInfo != "" {

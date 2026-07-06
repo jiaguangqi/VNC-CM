@@ -62,20 +62,24 @@ type Host struct {
 
 // Session 远程桌面会话模型
 type Session struct {
-	ID                 uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	UserID             uuid.UUID      `gorm:"type:uuid;not null;index" json:"user_id"`
-	HostID             uuid.UUID      `gorm:"type:uuid;not null;index" json:"host_id"`
-	Protocol           string         `gorm:"size:16;not null" json:"protocol"`                       // vnc, rdp, spice, x2go, pcoip
-	VncBackend         string         `gorm:"size:16;not null;default:'turbovnc'" json:"vnc_backend"` // turbovnc, tigervnc
-	Resolution         string         `gorm:"size:16;default:'1920x1080'" json:"resolution"`
-	ColorDepth         int            `gorm:"default:24" json:"color_depth"`
-	PerformanceProfile string         `gorm:"size:24;not null;default:'balanced'" json:"performance_profile"` // quality, balanced, low_bandwidth
-	Status             string         `gorm:"size:16;not null;default:'pending'" json:"status"`               // pending, starting, running, idle, terminated, error
-	ConnectionInfo     string         `gorm:"type:jsonb" json:"connection_info,omitempty"`                    // JSON 对象：port, password, native_url
-	ExpiresAt          *time.Time     `json:"expires_at,omitempty"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                  uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	UserID              uuid.UUID      `gorm:"type:uuid;not null;index" json:"user_id"`
+	HostID              uuid.UUID      `gorm:"type:uuid;not null;index" json:"host_id"`
+	Protocol            string         `gorm:"size:16;not null" json:"protocol"`                       // vnc, rdp, spice, x2go, pcoip
+	VncBackend          string         `gorm:"size:16;not null;default:'turbovnc'" json:"vnc_backend"` // turbovnc, tigervnc
+	Resolution          string         `gorm:"size:16;default:'1920x1080'" json:"resolution"`
+	ColorDepth          int            `gorm:"default:24" json:"color_depth"`
+	PerformanceProfile  string         `gorm:"size:24;not null;default:'balanced'" json:"performance_profile"` // quality, balanced, low_bandwidth
+	CurrentBandwidthBps int64          `gorm:"not null;default:0" json:"current_bandwidth_bps"`
+	PeakBandwidthBps    int64          `gorm:"not null;default:0" json:"peak_bandwidth_bps"`
+	TotalNetworkBytes   int64          `gorm:"not null;default:0" json:"total_network_bytes"`
+	LastBandwidthAt     *time.Time     `json:"last_bandwidth_at,omitempty"`
+	Status              string         `gorm:"size:16;not null;default:'pending'" json:"status"` // pending, starting, running, idle, terminated, error
+	ConnectionInfo      string         `gorm:"type:jsonb" json:"connection_info,omitempty"`      // JSON 对象：port, password, native_url
+	ExpiresAt           *time.Time     `json:"expires_at,omitempty"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// 关联
 	User           User            `gorm:"foreignKey:UserID" json:"user,omitempty"`
