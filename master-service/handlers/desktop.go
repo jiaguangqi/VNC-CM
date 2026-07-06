@@ -27,10 +27,12 @@ func NewDesktopHandler(encryptor *services.EncryptionService) *DesktopHandler {
 }
 
 type CreateDesktopRequest struct {
-	DesktopEnv string
+	DesktopEnv string `json:"desktop_env" binding:"omitempty,oneof=gnome xfce"`
 	Protocol   string `json:"protocol" binding:"required,oneof=vnc rdp spice"`
 	Resolution string `json:"resolution" binding:"required"`
+	ColorDepth int    `json:"color_depth" binding:"omitempty,oneof=8 16 24"`
 	VncBackend string `json:"vnc_backend" binding:"omitempty,oneof=turbovnc tigervnc"`
+	HostID     string `json:"host_id" binding:"omitempty,uuid"`
 }
 
 type DesktopResponse struct {
@@ -164,27 +166,41 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		return
 	}
 
-	var hosts []models.Host
-	if err := database.DB.Where("status = ? AND current_sessions < max_sessions", "healthy").
-		Order("current_sessions ASC").
-		Find(&hosts).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "宿主机查询失败"})
-		return
-	}
-
-	if len(hosts) == 0 {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前无可用宿主机，请稍后再试"})
-		return
-	}
-
-	minSessions := hosts[0].CurrentSessions
-	var candidates []models.Host
-	for _, h := range hosts {
-		if h.CurrentSessions == minSessions {
-			candidates = append(candidates, h)
+	var host models.Host
+	if req.HostID != "" {
+		if err := database.DB.
+			Where("id = ? AND status = ? AND current_sessions < max_sessions", req.HostID, "healthy").
+			First(&host).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "指定宿主机不可用或会话已满"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "宿主机查询失败"})
+			return
 		}
+	} else {
+		var hosts []models.Host
+		if err := database.DB.Where("status = ? AND current_sessions < max_sessions", "healthy").
+			Order("current_sessions ASC").
+			Find(&hosts).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "宿主机查询失败"})
+			return
+		}
+
+		if len(hosts) == 0 {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前无可用宿主机，请稍后再试"})
+			return
+		}
+
+		minSessions := hosts[0].CurrentSessions
+		var candidates []models.Host
+		for _, h := range hosts {
+			if h.CurrentSessions == minSessions {
+				candidates = append(candidates, h)
+			}
+		}
+		host = candidates[rand.Intn(len(candidates))]
 	}
-	host := candidates[rand.Intn(len(candidates))]
 
 	if host.SSHUsername == "" || host.SSHCredentialEncrypted == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "宿主机 SSH 凭据未配置，无法创建桌面"})
@@ -212,7 +228,12 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		vncBackend = "tigervnc"
 	}
 
-	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, vncPassword, linuxUser, desktopEnv, vncBackend); err != nil {
+	colorDepth := req.ColorDepth
+	if colorDepth == 0 {
+		colorDepth = 24
+	}
+
+	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "启动 VNC 会话失败: " + err.Error()})
 		return
 	}
@@ -233,6 +254,7 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		Protocol:       req.Protocol,
 		VncBackend:     vncBackend,
 		Resolution:     req.Resolution,
+		ColorDepth:     colorDepth,
 		Status:         "running",
 		ConnectionInfo: string(connInfoJSON),
 	}
@@ -269,6 +291,7 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 	var session models.Session
 	if err := database.DB.Where("id = ? AND user_id = ?", sessionID, uid).
 		Preload("Host").
+		Preload("User").
 		First(&session).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "桌面会话不存在"})
@@ -488,9 +511,7 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 }
 
 // startVNCOnHost 在宿主机上启动 VNC 会话（以 linuxUser 身份运行）
-
-// // startVNCOnHost 在宿主机上启动 VNC 会话（以 linuxUser 身份运行）
-func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort int, resolution, password, linuxUser, desktopEnv, vncBackend string) error {
+func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) error {
 	cred, err := h.encryptor.Decrypt(host.SSHCredentialEncrypted)
 	if err != nil {
 		return fmt.Errorf("解密凭据失败: %w", err)
@@ -551,9 +572,9 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 
 	var startCmdTemplate string
 	if vncBackend == "tigervnc" {
-		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth 24 -SecurityTypes VncAuth >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
+		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -SecurityTypes VncAuth >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
 	} else {
-		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth 24 -securitytypes None,Vnc >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
+		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth %%d -securitytypes None,Vnc >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
 	}
 
 	// 设置 VNC 密码（以 root 为目标用户创建）
@@ -592,7 +613,7 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 	}
 
 	// 启动 vncserver（以目标用户身份）
-	startCmd := fmt.Sprintf(startCmdTemplate, display, resolution)
+	startCmd := fmt.Sprintf(startCmdTemplate, display, resolution, colorDepth)
 	session, err = client.NewSession()
 	if err != nil {
 		return fmt.Errorf("创建 SSH session 失败: %w", err)

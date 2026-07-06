@@ -25,19 +25,19 @@ func NewHostHandler(encryptor *services.EncryptionService) *HostHandler {
 
 // CreateHostRequest 添加宿主机请求
 type CreateHostRequest struct {
-	Hostname       string `json:"hostname" binding:"required"`
-	IPAddress      string `json:"ip_address" binding:"required,ip"`
-	OSType         string `json:"os_type" binding:"required,oneof=linux windows"`
-	MaxSessions    int    `json:"max_sessions" binding:"required,min=1,max=1000"`
-	SSHUsername    string `json:"ssh_username"`
-	SSHPort        int    `json:"ssh_port" binding:"min=1,max=65535"`
-	SSHAuthType    string `json:"ssh_auth_type" binding:"oneof=password key"`
-	SSHCredential  string `json:"ssh_credential"` // 明文密码或私钥，加密后存储
-	SSHPublicKey   string `json:"ssh_public_key"`
-	Region         string `json:"region"`
-	AZ             string `json:"az"`
-	CPUCores       int    `json:"cpu_cores"`
-	TotalRAMMB     int64  `json:"total_ram_mb"`
+	Hostname      string `json:"hostname" binding:"required"`
+	IPAddress     string `json:"ip_address" binding:"required,ip"`
+	OSType        string `json:"os_type" binding:"required,oneof=linux windows"`
+	MaxSessions   int    `json:"max_sessions" binding:"required,min=1,max=1000"`
+	SSHUsername   string `json:"ssh_username"`
+	SSHPort       int    `json:"ssh_port" binding:"min=1,max=65535"`
+	SSHAuthType   string `json:"ssh_auth_type" binding:"oneof=password key"`
+	SSHCredential string `json:"ssh_credential"` // 明文密码或私钥，加密后存储
+	SSHPublicKey  string `json:"ssh_public_key"`
+	Region        string `json:"region"`
+	AZ            string `json:"az"`
+	CPUCores      int    `json:"cpu_cores"`
+	TotalRAMMB    int64  `json:"total_ram_mb"`
 }
 
 // CreateHost 添加新宿主机（仅管理员）
@@ -155,6 +155,45 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"hosts": resp})
 }
 
+// ListAvailableDesktopHosts 获取普通用户可选择的桌面运行节点，不暴露 SSH 配置
+func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
+	var hosts []models.Host
+	if err := database.DB.
+		Where("status = ? AND current_sessions < max_sessions", "healthy").
+		Order("current_sessions ASC, hostname ASC").
+		Find(&hosts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询失败"})
+		return
+	}
+
+	type HostOption struct {
+		ID              string `json:"id"`
+		Hostname        string `json:"hostname"`
+		IPAddress       string `json:"ip_address"`
+		OSType          string `json:"os_type"`
+		MaxSessions     int    `json:"max_sessions"`
+		CurrentSessions int    `json:"current_sessions"`
+		Region          string `json:"region"`
+		AZ              string `json:"az"`
+	}
+
+	resp := make([]HostOption, 0, len(hosts))
+	for _, host := range hosts {
+		resp = append(resp, HostOption{
+			ID:              host.ID.String(),
+			Hostname:        host.Hostname,
+			IPAddress:       host.IPAddress,
+			OSType:          host.OSType,
+			MaxSessions:     host.MaxSessions,
+			CurrentSessions: host.CurrentSessions,
+			Region:          host.Region,
+			AZ:              host.AZ,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"hosts": resp})
+}
+
 // GetHost 获取单个宿主机详情
 func (h *HostHandler) GetHost(c *gin.Context) {
 	hostID := c.Param("id")
@@ -246,7 +285,7 @@ func (h *HostHandler) DeleteHost(c *gin.Context) {
 
 	if host.CurrentSessions > 0 {
 		c.JSON(http.StatusConflict, gin.H{
-			"error": "该宿主机上有正在运行的桌面，无法删除",
+			"error":            "该宿主机上有正在运行的桌面，无法删除",
 			"running_sessions": host.CurrentSessions,
 		})
 		return

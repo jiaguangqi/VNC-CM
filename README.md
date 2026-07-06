@@ -38,7 +38,7 @@ VNC Cluster Manager Platform 是一个纯单机部署的远程桌面协同办公
 | 🖥️ **远程桌面** | 基于 noVNC 的 Web VNC 客户端，支持全屏、缩放、剪贴板 | ✅ 已完成 |
 | 👥 **协同会话** | 多用户同时接入同一桌面，支持观察者/操作者模式 | ✅ 已完成 |
 | 📁 **文件传输** | Web 端文件上传下载，支持文件夹批量传输 | ✅ 已完成 |
-| 🏠 **宿主机管理** | Agent 自动注册、心跳检测、资源监控、状态上报 | ✅ 已完成 |
+| 🏠 **宿主机管理** | Agent 自动注册、心跳检测、资源监控，桌面默认自动调度并支持手动指定运行节点 | ✅ 已完成 |
 | ⚡ **实时通信** | WebSocket 全双工通信，低延迟的指令与画面传输 | ✅ 已完成 |
 | 🔒 **安全加密** | AES-256-GCM 凭证加密，TLS/SSL 传输加密 | ✅ 已完成 |
 | 🐳 **容器化部署** | Docker Compose 一键部署，支持水平扩展 | ✅ 已完成 |
@@ -259,6 +259,7 @@ Master Service 提供 RESTful API，主要接口：
 | `/api/v1/hosts` | POST | 注册宿主机 |
 | `/api/v1/desktops` | GET | 获取桌面实例列表 |
 | `/api/v1/desktops` | POST | 创建桌面实例 |
+| `/api/v1/desktop-hosts` | GET | 获取可运行桌面的节点列表 |
 | `/api/v1/files/upload` | POST | 文件上传 |
 | `/api/v1/files/download` | GET | 文件下载 |
 | `/health` | GET | 服务健康检查 |

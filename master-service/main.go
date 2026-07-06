@@ -78,6 +78,7 @@ func main() {
 		authorized.DELETE("/desktops/:id/record", desktopHandler.DeleteDesktop)
 		authorized.POST("/desktops/batch/terminate", desktopHandler.BatchTerminateDesktops)
 		authorized.POST("/desktops/batch/delete", desktopHandler.BatchDeleteDesktops)
+		authorized.GET("/desktop-hosts", hostHandler.ListAvailableDesktopHosts)
 
 		// 文件传输
 		fileHandler := handlers.NewFileHandler(encryptor)

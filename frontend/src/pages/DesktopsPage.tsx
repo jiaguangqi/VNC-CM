@@ -35,7 +35,7 @@ import {
   CloseSquareOutlined,
   LogoutOutlined,
 } from "@ant-design/icons";
-import { desktopAPI, collaborationAPI } from "../api";
+import { desktopAPI, collaborationAPI, hostAPI } from "../api";
 import FileTransferModal from "../components/FileTransferModal";
 import FloatingTransferStatus from "../components/FloatingTransferStatus";
 import { useFileTransferStore } from "../stores/fileTransferStore";
@@ -66,6 +66,15 @@ interface DesktopSession {
   created_at: string;
 }
 
+interface HostOption {
+  id: string;
+  hostname: string;
+  ip_address: string;
+  status: string;
+  current_sessions: number;
+  max_sessions: number;
+}
+
 type ViewMode = "list" | "grid";
 
 const DesktopsPage: React.FC = () => {
@@ -78,6 +87,7 @@ const DesktopsPage: React.FC = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [invitedCollabs, setInvitedCollabs] = useState<any[]>([]);
   const [mySentInvites, setMySentInvites] = useState<any[]>([]);
+  const [availableHosts, setAvailableHosts] = useState<HostOption[]>([]);
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
   const [inviteForm] = Form.useForm();
   const [inviteLoading, setInviteLoading] = useState(false);
@@ -147,8 +157,18 @@ const fetchDesktops = async () => {
     }
   };
 
+  const fetchAvailableHosts = async () => {
+    try {
+      const res = await hostAPI.listDesktopHosts();
+      setAvailableHosts(res.data?.hosts || []);
+    } catch {
+      setAvailableHosts([]);
+    }
+  };
+
   useEffect(() => {
     fetchDesktops();
+    fetchAvailableHosts();
     fetchInvited();
     fetchMySentInvites();
     const interval = setInterval(fetchDesktops, 30000);
@@ -239,6 +259,7 @@ const fetchDesktops = async () => {
         color_depth: values.color_depth || 24,
         desktop_env: values.desktop_env,
         vnc_backend: values.protocol === "vnc" ? (values.vnc_backend || "turbovnc") : undefined,
+        host_id: values.host_id === "auto" ? undefined : values.host_id,
       });
       message.success(
         <span>
@@ -670,7 +691,10 @@ const fetchDesktops = async () => {
         </div>
         <Space wrap>
           {isAdmin && <Tag color="red">管理员视图</Tag>}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+            fetchAvailableHosts();
+            setModalOpen(true);
+          }}>
             申请桌面
           </Button>
         </Space>
@@ -909,6 +933,16 @@ const fetchDesktops = async () => {
         okText="申请"
       >
         <Form form={form} layout="vertical" onFinish={handleApply}>
+          <Form.Item name="host_id" label="运行节点" initialValue="auto" rules={[{ required: true }]}>
+            <Select placeholder="请选择运行节点">
+              <Select.Option value="auto">自动调度（推荐）</Select.Option>
+              {availableHosts.map((host) => (
+                <Select.Option key={host.id} value={host.id}>
+                  {host.hostname} · {host.ip_address}（{host.current_sessions}/{host.max_sessions}）
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
           <Form.Item name="desktop_env" label="桌面环境" initialValue="gnome" rules={[{ required: true }]}>
             <Select>
               <Select.Option value="gnome">GNOME</Select.Option>
