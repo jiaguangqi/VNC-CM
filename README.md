@@ -191,6 +191,9 @@ docker compose up -d frontend
 # 5. 查看服务状态
 docker compose ps
 docker compose logs -f master-service
+
+# 6. 运行部署自检
+./install.sh selfcheck
 ```
 
 ### 生产环境部署建议
