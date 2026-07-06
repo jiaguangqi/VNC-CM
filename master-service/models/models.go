@@ -9,6 +9,15 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	SessionStatusPending    = "pending"
+	SessionStatusStarting   = "starting"
+	SessionStatusRunning    = "running"
+	SessionStatusStopping   = "stopping"
+	SessionStatusTerminated = "terminated"
+	SessionStatusError      = "error"
+)
+
 // User 用户模型，支持本地数据库用户与操作系统用户
 type User struct {
 	ID           uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
@@ -68,6 +77,10 @@ type Session struct {
 	User           User            `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	Host           Host            `gorm:"foreignKey:HostID" json:"host,omitempty"`
 	Collaborations []Collaboration `gorm:"foreignKey:SessionID" json:"-"`
+}
+
+func IsTerminalSessionStatus(status string) bool {
+	return status == SessionStatusTerminated || status == SessionStatusError
 }
 
 // Collaboration 协同协助邀请模型

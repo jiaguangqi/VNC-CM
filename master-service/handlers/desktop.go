@@ -233,11 +233,6 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		colorDepth = 24
 	}
 
-	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "启动 VNC 会话失败: " + err.Error()})
-		return
-	}
-
 	uidUUID, _ := uuid.Parse(uid)
 	connInfo := map[string]interface{}{
 		"port":     port,
@@ -255,15 +250,33 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		VncBackend:     vncBackend,
 		Resolution:     req.Resolution,
 		ColorDepth:     colorDepth,
-		Status:         "running",
+		Status:         models.SessionStatusStarting,
 		ConnectionInfo: string(connInfoJSON),
 	}
 
 	if err := database.DB.Create(&session).Error; err != nil {
-		_ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "会话记录创建失败"})
 		return
 	}
+
+	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend); err != nil {
+		connInfo["error"] = err.Error()
+		errorConnInfoJSON, _ := json.Marshal(connInfo)
+		database.DB.Model(&session).Updates(map[string]interface{}{
+			"status":          models.SessionStatusError,
+			"connection_info": string(errorConnInfoJSON),
+		})
+		_ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "启动 VNC 会话失败: " + err.Error(), "session_id": session.ID.String()})
+		return
+	}
+
+	if err := database.DB.Model(&session).Update("status", models.SessionStatusRunning).Error; err != nil {
+		_ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "会话状态更新失败"})
+		return
+	}
+	session.Status = models.SessionStatusRunning
 
 	database.DB.Model(&host).Update("current_sessions", gorm.Expr("current_sessions + 1"))
 
@@ -315,13 +328,21 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 		}
 	}
 
+	previousStatus := session.Status
+	if previousStatus == models.SessionStatusTerminated {
+		c.JSON(http.StatusOK, gin.H{"message": "桌面会话已关闭"})
+		return
+	}
+
+	database.DB.Model(&session).Update("status", models.SessionStatusStopping)
+
 	if display > 0 {
 		_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 	}
 
-	database.DB.Model(&session).Update("status", "terminated")
+	database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
 
-	if session.Host.CurrentSessions > 0 {
+	if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
 		database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
 	}
 
@@ -352,6 +373,11 @@ func (h *DesktopHandler) DeleteDesktop(c *gin.Context) {
 		return
 	}
 
+	previousStatus := session.Status
+	if !models.IsTerminalSessionStatus(previousStatus) {
+		database.DB.Model(&session).Update("status", models.SessionStatusStopping)
+	}
+
 	// 清理宿主机上的残留进程和端口（即使状态是 terminated 也要清理，防止残留）
 	var display int
 	var wsPort int
@@ -368,6 +394,10 @@ func (h *DesktopHandler) DeleteDesktop(c *gin.Context) {
 	}
 	if display > 0 && session.Host.ID != uuid.Nil {
 		_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+	}
+
+	if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
+		database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
 	}
 
 	if err := database.DB.Delete(&session).Error; err != nil {
@@ -401,7 +431,7 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 
 	for _, id := range req.IDs {
 		var session models.Session
-		query := database.DB.Where("id = ? AND status = ?", id, "running").Preload("Host").Preload("User")
+		query := database.DB.Where("id = ? AND status IN ?", id, []string{models.SessionStatusRunning, models.SessionStatusStarting}).Preload("Host").Preload("User")
 		if roleStr != "admin" {
 			query = query.Where("user_id = ?", uid)
 		}
@@ -424,12 +454,15 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 			}
 		}
 
+		previousStatus := session.Status
+		database.DB.Model(&session).Update("status", models.SessionStatusStopping)
+
 		if display > 0 {
 			_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}
 
-		database.DB.Model(&session).Update("status", "terminated")
-		if session.Host.CurrentSessions > 0 {
+		database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
+		if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
 			database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
 		}
 		success = append(success, id)
@@ -467,7 +500,7 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 
 	for _, id := range req.IDs {
 		var session models.Session
-		query := database.DB.Where("id = ? AND status = ?", id, "terminated").Preload("Host").Preload("User")
+		query := database.DB.Where("id = ? AND status = ?", id, models.SessionStatusTerminated).Preload("Host").Preload("User")
 		if roleStr != "admin" {
 			query = query.Where("user_id = ?", uid)
 		}

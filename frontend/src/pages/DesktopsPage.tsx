@@ -77,6 +77,12 @@ interface HostOption {
 
 type ViewMode = "list" | "grid";
 
+const isProcessingStatus = (status: string) => ["pending", "starting", "stopping"].includes(status);
+const canConnectDesktop = (status: string) => status === "running";
+const canInviteDesktop = (status: string) => status === "running";
+const canStopDesktop = (status: string) => !["terminated", "stopping"].includes(status);
+const canBatchTerminateDesktop = (status: string) => ["running", "starting"].includes(status);
+
 const DesktopsPage: React.FC = () => {
   const [desktops, setDesktops] = useState<DesktopSession[]>([]);
   const [loading, setLoading] = useState(false);
@@ -99,7 +105,7 @@ const DesktopsPage: React.FC = () => {
   const { open: openFileTransfer } = useFileTransferStore();
 
   const runningCount = desktops.filter((desktop) => desktop.status === "running").length;
-  const pendingCount = desktops.filter((desktop) => desktop.status === "pending").length;
+  const pendingCount = desktops.filter((desktop) => isProcessingStatus(desktop.status)).length;
   const terminatedCount = desktops.filter((desktop) => desktop.status === "terminated").length;
 
 
@@ -185,7 +191,7 @@ const fetchDesktops = async () => {
     if (ids.length === 0) return;
     const runningIds = ids.filter((id) => {
       const d = desktops.find((x) => x.id === id);
-      return d && d.status === "running";
+      return d && canBatchTerminateDesktop(d.status);
     });
     if (runningIds.length === 0) {
       message.warning("没有可关闭的运行中桌面");
@@ -318,8 +324,11 @@ const fetchDesktops = async () => {
   const statusColor = (s: string) => {
     switch (s) {
       case "running": return "green";
-      case "pending": return "orange";
+      case "pending":
+      case "starting": return "gold";
+      case "stopping": return "orange";
       case "terminated": return "default";
+      case "error": return "red";
       default: return "red";
     }
   };
@@ -327,8 +336,11 @@ const fetchDesktops = async () => {
   const statusText = (s: string) => {
     switch (s) {
       case "running": return "运行中";
-      case "pending": return "创建中";
+      case "pending": return "待创建";
+      case "starting": return "启动中";
+      case "stopping": return "关闭中";
       case "terminated": return "已关闭";
+      case "error": return "异常";
       default: return s;
     }
   };
@@ -383,6 +395,7 @@ const fetchDesktops = async () => {
               type="primary"
               icon={<PlayCircleOutlined />}
               onClick={() => setConnectModal(record)}
+              disabled={!canConnectDesktop(record.status)}
             />
           </Tooltip>
           <Tooltip title="文件传输">
@@ -390,6 +403,7 @@ const fetchDesktops = async () => {
               size="small"
               icon={<InboxOutlined />}
               onClick={() => openFileTransfer(record.id, record.host_name || record.id)}
+              disabled={!canConnectDesktop(record.status)}
             />
           </Tooltip>
           <Tooltip title="关闭">
@@ -398,10 +412,10 @@ const fetchDesktops = async () => {
               danger
               icon={<StopOutlined />}
               onClick={() => handleTerminate(record.id)}
-              disabled={record.status === "terminated"}
+              disabled={!canStopDesktop(record.status)}
             />
           </Tooltip>
-          {record.status !== "terminated" && (
+          {canInviteDesktop(record.status) && (
             <Tooltip title="邀请协作者">
               <Button
                 size="small"
@@ -534,6 +548,7 @@ const fetchDesktops = async () => {
   const DesktopCard = ({ desktop }: { desktop: DesktopSession }) => {
     const isRunning = desktop.status === "running";
     const isTerminated = desktop.status === "terminated";
+    const canStop = canStopDesktop(desktop.status);
     const isWindows = desktop.host_os?.toLowerCase().includes("win");
 
     return (
@@ -608,10 +623,10 @@ const fetchDesktops = async () => {
                   size="small"
                   icon={<StopOutlined />}
                   onClick={() => handleTerminate(desktop.id)}
-                  disabled={!isRunning}
+                  disabled={!canStop}
                   title="关闭"
                 />
-                {isRunning && (
+                {canInviteDesktop(desktop.status) && (
                   <Button
                     size="small"
                     icon={<TeamOutlined />}
@@ -712,9 +727,9 @@ const fetchDesktops = async () => {
           <div className="rdp-stat-meta"><span>可直接连接或发起协助</span></div>
         </Card>
         <Card className="rdp-soft-card">
-          <div className="rdp-stat-label">创建中</div>
+          <div className="rdp-stat-label">处理中</div>
           <div className="rdp-stat-value" style={{ fontSize: 32 }}>{pendingCount}</div>
-          <div className="rdp-stat-meta"><span>等待桌面服务初始化</span></div>
+          <div className="rdp-stat-meta"><span>正在启动或关闭的会话</span></div>
         </Card>
         <Card className="rdp-soft-card">
           <div className="rdp-stat-label">已关闭</div>

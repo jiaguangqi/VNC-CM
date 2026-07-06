@@ -266,6 +266,19 @@ Master Service 提供 RESTful API，主要接口：
 
 完整 API 文档可通过源码中的 `handlers/` 目录查看，或使用工具（如 Swagger）生成。
 
+### 桌面生命周期状态
+
+桌面会话使用以下状态流转，便于前端展示、运维排障和后续健康检查：
+
+| 状态 | 说明 |
+|------|------|
+| `pending` | 已登记但尚未开始处理 |
+| `starting` | 正在启动 VNC 和 Web 访问代理 |
+| `running` | VNC 桌面已启动，可连接 |
+| `stopping` | 正在关闭并清理远端进程 |
+| `terminated` | 已关闭，可删除历史记录 |
+| `error` | 启动或运行异常，错误信息记录在 `connection_info` 中 |
+
 ### 数据库模型
 
 核心数据表：
