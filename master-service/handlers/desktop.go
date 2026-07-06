@@ -208,14 +208,17 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		return
 	}
 
-	var maxDisplay int
-	database.DB.Raw("SELECT COALESCE(MAX(CAST(connection_info->>'display' AS INTEGER)), 0) FROM sessions WHERE host_id = ?", host.ID).Scan(&maxDisplay)
-	display := maxDisplay + 1
-	if display < 1 {
-		display = 1
+	availableDisplays, err := services.AvailableDisplaysForHost(host.ID, host.MaxSessions)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
 	}
-	port := 5900 + display
-	wsPort := 6100 + display
+
+	display, port, wsPort, err := h.selectAvailableDisplayAndPorts(host, availableDisplays)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
 
 	vncPassword := generateRandomPassword(8)
 
@@ -544,11 +547,47 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 	})
 }
 
-// startVNCOnHost 在宿主机上启动 VNC 会话（以 linuxUser 身份运行）
-func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) error {
+func (h *DesktopHandler) selectAvailableDisplayAndPorts(host models.Host, displays []int) (int, int, int, error) {
+	for _, display := range displays {
+		port := 5900 + display
+		wsPort := 6100 + display
+		if err := h.ensureRemotePortsFree(host, port, wsPort); err == nil {
+			return display, port, wsPort, nil
+		}
+	}
+	return 0, 0, 0, fmt.Errorf("宿主机没有可用的 VNC/websockify 端口")
+}
+
+func (h *DesktopHandler) ensureRemotePortsFree(host models.Host, ports ...int) error {
+	client, err := h.dialHostSSH(host)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	checks := make([]string, 0, len(ports))
+	for _, port := range ports {
+		checks = append(checks, fmt.Sprintf(`if command -v ss >/dev/null 2>&1; then ! ss -ltn | grep -Eq "[:.]%d[[:space:]]"; else ! netstat -ltn 2>/dev/null | grep -Eq "[:.]%d[[:space:]]"; fi`, port, port))
+	}
+	cmd := strings.Join(checks, " && ")
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("创建 SSH session 失败: %w", err)
+	}
+	defer session.Close()
+
+	output, err := session.CombinedOutput(cmd)
+	if err != nil {
+		return fmt.Errorf("端口已占用或检查失败: %w, output: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func (h *DesktopHandler) dialHostSSH(host models.Host) (*ssh.Client, error) {
 	cred, err := h.encryptor.Decrypt(host.SSHCredentialEncrypted)
 	if err != nil {
-		return fmt.Errorf("解密凭据失败: %w", err)
+		return nil, fmt.Errorf("解密凭据失败: %w", err)
 	}
 
 	var authMethods []ssh.AuthMethod
@@ -557,7 +596,7 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 	} else {
 		signer, err := ssh.ParsePrivateKey([]byte(cred))
 		if err != nil {
-			return fmt.Errorf("解析私钥失败: %w", err)
+			return nil, fmt.Errorf("解析私钥失败: %w", err)
 		}
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
 	}
@@ -576,7 +615,16 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return fmt.Errorf("SSH 连接失败: %w", err)
+		return nil, fmt.Errorf("SSH 连接失败: %w", err)
+	}
+	return client, nil
+}
+
+// startVNCOnHost 在宿主机上启动 VNC 会话（以 linuxUser 身份运行）
+func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) error {
+	client, err := h.dialHostSSH(host)
+	if err != nil {
+		return err
 	}
 	defer client.Close()
 
@@ -687,40 +735,10 @@ type desktopCleanupResult struct {
 func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, linuxUser, vncBackend string) (desktopCleanupResult, error) {
 	result := desktopCleanupResult{}
 
-	cred, err := h.encryptor.Decrypt(host.SSHCredentialEncrypted)
+	client, err := h.dialHostSSH(host)
 	if err != nil {
-		result.TerminalConnectionFailure = fmt.Sprintf("解密凭据失败: %v", err)
-		return result, fmt.Errorf("解密凭据失败: %w", err)
-	}
-
-	var authMethods []ssh.AuthMethod
-	if host.SSHAuthType == "password" {
-		authMethods = append(authMethods, ssh.Password(cred))
-	} else {
-		signer, err := ssh.ParsePrivateKey([]byte(cred))
-		if err != nil {
-			result.TerminalConnectionFailure = fmt.Sprintf("解析私钥失败: %v", err)
-			return result, fmt.Errorf("解析私钥失败: %w", err)
-		}
-		authMethods = append(authMethods, ssh.PublicKeys(signer))
-	}
-
-	config := &ssh.ClientConfig{
-		User:            host.SSHUsername,
-		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         15 * time.Second,
-	}
-
-	addr := fmt.Sprintf("%s:%d", host.IPAddress, host.SSHPort)
-	if host.SSHPort == 0 {
-		addr = fmt.Sprintf("%s:22", host.IPAddress)
-	}
-
-	client, err := ssh.Dial("tcp", addr, config)
-	if err != nil {
-		result.TerminalConnectionFailure = fmt.Sprintf("SSH 连接失败: %v", err)
-		return result, fmt.Errorf("SSH 连接失败: %w", err)
+		result.TerminalConnectionFailure = err.Error()
+		return result, err
 	}
 	defer client.Close()
 	result.RemoteConnected = true

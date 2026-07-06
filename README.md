@@ -281,6 +281,8 @@ Master Service 提供 RESTful API，主要接口：
 
 Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockify 监听端口；如果远端进程不存在或端口不可用，会将会话标记为 `error` 并释放节点会话计数。
 
+创建桌面时，系统会在目标节点上分配最低可用 VNC display，并在启动前检查对应的 VNC 端口和 websockify 端口是否空闲；如果端口已被占用，会自动尝试下一个可用 display。
+
 ### 数据库模型
 
 核心数据表：
