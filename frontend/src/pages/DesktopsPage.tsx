@@ -17,6 +17,7 @@ import {
   Col,
   Checkbox,
   Tooltip,
+  Alert,
 } from "antd";
 import {
   PlusOutlined,
@@ -62,6 +63,8 @@ interface DesktopSession {
     password: string;
     port: number;
     display: number;
+    error?: string;
+    last_health_check_at?: string;
   };
   created_at: string;
 }
@@ -472,6 +475,7 @@ const fetchDesktops = async () => {
     const url = desktop.connection_info?.url || "";
     const webUrl = desktop.connection_info?.web_url || "";
     const password = desktop.connection_info?.password || "";
+    const errorText = desktop.connection_info?.error || "";
 
     return (
       <Tabs defaultActiveKey="client">
@@ -480,6 +484,15 @@ const fetchDesktops = async () => {
           key="client"
         >
           <div style={{ padding: "12px 0" }}>
+            {desktop.status === "error" && errorText && (
+              <Alert
+                type="error"
+                showIcon
+                message="桌面异常"
+                description={errorText}
+                style={{ marginBottom: 12 }}
+              />
+            )}
             <p><b>协议:</b> {desktop.protocol.toUpperCase()}</p>
             <p><b>地址:</b> {desktop.host_ip}:{desktop.port}</p>
             <p>
@@ -591,6 +604,13 @@ const fetchDesktops = async () => {
             <Tag color={statusColor(desktop.status)} style={{ marginTop: 6, fontSize: 10, height: "auto", lineHeight: 1.4 }}>
               {statusText(desktop.status)}
             </Tag>
+            {desktop.status === "error" && desktop.connection_info?.error && (
+              <div style={{ marginTop: 6 }}>
+                <Text type="danger" style={{ fontSize: 11, overflowWrap: "anywhere" }}>
+                  {desktop.connection_info.error}
+                </Text>
+              </div>
+            )}
             {desktop.username && (
               <div style={{ marginTop: 4 }}>
                 <Text type="secondary" style={{ fontSize: 11, overflowWrap: "anywhere" }}>{desktop.username}</Text>

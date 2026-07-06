@@ -5,6 +5,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/remote-desktop/master-service/config"
@@ -30,9 +31,9 @@ func main() {
 		log.Fatalf("加密服务初始化失败: %v", err)
 	}
 
-	// 初始化调度器
-	scheduler := services.NewScheduler()
-	_ = scheduler // 后续 will be used
+	// 初始化桌面健康监控
+	desktopHealthMonitor := services.NewDesktopHealthMonitor(encryptor, time.Minute)
+	desktopHealthMonitor.Start()
 
 	// 初始化 WebSocket Agent Server
 	agentServer := grpc.NewHostAgentServer()

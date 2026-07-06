@@ -279,6 +279,8 @@ Master Service 提供 RESTful API，主要接口：
 | `terminated` | 已关闭，可删除历史记录 |
 | `error` | 启动或运行异常，错误信息记录在 `connection_info` 中 |
 
+Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockify 监听端口；如果远端进程不存在或端口不可用，会将会话标记为 `error` 并释放节点会话计数。
+
 ### 数据库模型
 
 核心数据表：
