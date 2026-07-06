@@ -35,6 +35,9 @@ import {
   CheckSquareOutlined,
   CloseSquareOutlined,
   LogoutOutlined,
+  CopyOutlined,
+  FullscreenOutlined,
+  ReloadOutlined,
 } from "@ant-design/icons";
 import { desktopAPI, collaborationAPI, hostAPI } from "../api";
 import FileTransferModal from "../components/FileTransferModal";
@@ -76,6 +79,10 @@ interface HostOption {
   status: string;
   current_sessions: number;
   max_sessions: number;
+  region?: string;
+  az?: string;
+  cpu_cores?: number;
+  total_ram_mb?: number;
   ready: boolean;
   current_user_exists: boolean;
   agent_managed?: boolean;
@@ -110,6 +117,27 @@ const DesktopsPage: React.FC = () => {
   const { user } = useAuthStore();
   const isAdmin = user?.role === "admin";
   const { open: openFileTransfer } = useFileTransferStore();
+
+  const copyText = async (value: string, label: string = "内容") => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      message.success(`${label}已复制`);
+    } catch {
+      message.error("复制失败");
+    }
+  };
+
+  const formatMemory = (mb?: number) => {
+    if (!mb) return "-";
+    return `${(mb / 1024).toFixed(1)}G`;
+  };
+
+  const hostDisabledReason = (host: HostOption) => {
+    if (!host.current_user_exists) return "当前用户不存在";
+    if (!host.ready) return host.missing?.length ? `缺失 ${host.missing.join(", ")}` : "节点未就绪";
+    return "";
+  };
 
   const runningCount = desktops.filter((desktop) => desktop.status === "running").length;
   const pendingCount = desktops.filter((desktop) => isProcessingStatus(desktop.status)).length;
@@ -480,6 +508,36 @@ const fetchDesktops = async () => {
     const webUrl = desktop.connection_info?.web_url || "";
     const password = desktop.connection_info?.password || "";
     const errorText = desktop.connection_info?.error || "";
+    const openWebDesktop = (fullscreen = false) => {
+      if (!webUrl) return;
+      const target = new URL(webUrl);
+      target.searchParams.set("autoconnect", "true");
+      target.searchParams.set("reconnect", "true");
+      const features = fullscreen
+        ? `noopener,noreferrer,width=${window.screen.availWidth},height=${window.screen.availHeight},left=0,top=0`
+        : "noopener,noreferrer,width=1280,height=800";
+      window.open(target.toString(), "_blank", features);
+    };
+    const CopyField = ({ label, value, password: isPassword = false }: { label: string; value: string; password?: boolean }) => (
+      <div style={{ marginBottom: 12 }}>
+        <Text type="secondary">{label}</Text>
+        {isPassword ? (
+          <Input.Password
+            value={value}
+            readOnly
+            style={{ marginTop: 4 }}
+            suffix={<Button size="small" icon={<CopyOutlined />} onClick={() => copyText(value, label)} />}
+          />
+        ) : (
+          <Input
+            value={value}
+            readOnly
+            style={{ marginTop: 4 }}
+            suffix={<Button size="small" icon={<CopyOutlined />} onClick={() => copyText(value, label)} />}
+          />
+        )}
+      </div>
+    );
 
     return (
       <Tabs defaultActiveKey="client">
@@ -497,29 +555,16 @@ const fetchDesktops = async () => {
                 style={{ marginBottom: 12 }}
               />
             )}
-            <p><b>协议:</b> {desktop.protocol.toUpperCase()}</p>
-            <p><b>地址:</b> {desktop.host_ip}:{desktop.port}</p>
-            <p>
-              <b>URL:</b>
-              <Input value={url} readOnly style={{ marginTop: 4 }}
-                suffix={
-                  <Button size="small" onClick={() => { navigator.clipboard.writeText(url); message.success("已复制"); }}>
-                    复制
-                  </Button>
-                }
-              />
-            </p>
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Tag color={statusColor(desktop.status)}>{statusText(desktop.status)}</Tag>
+              <Tag color="blue">{desktop.protocol.toUpperCase()}</Tag>
+              <Tag>{desktop.resolution}</Tag>
+            </Space>
+            <CopyField label="VNC URL" value={url} />
+            <CopyField label="宿主机 IP" value={desktop.host_ip} />
+            <CopyField label="端口" value={String(desktop.port || "")} />
             {password && (
-              <p>
-                <b>密码:</b>
-                <Input.Password value={password} readOnly style={{ marginTop: 4 }}
-                  suffix={
-                    <Button size="small" onClick={() => { navigator.clipboard.writeText(password); message.success("已复制"); }}>
-                      复制
-                    </Button>
-                  }
-                />
-              </p>
+              <CopyField label="密码" value={password} password />
             )}
             <p style={{ marginTop: 12, color: "#888" }}>
               请使用 VNC Viewer、TigerVNC 等客户端工具连接
@@ -531,26 +576,23 @@ const fetchDesktops = async () => {
           key="web"
         >
           <div style={{ padding: "12px 0" }}>
-            <p>无需安装客户端，直接在浏览器中打开 VNC 桌面：</p>
             {webUrl ? (
               <>
-                <Button
-                  type="primary"
-                  icon={<GlobalOutlined />}
-                  onClick={() => window.open(webUrl, "_blank", "width=1280,height=800")}
-                  style={{ marginBottom: 12 }}
-                >
-                  新窗口打开 VNC 桌面
-                </Button>
-                <p style={{ marginTop: 8, color: "#888", fontSize: 12 }}>
-                  如遇安全证书警告，请点击「高级」→「继续访问」
-                </p>
-                <Input.TextArea
-                  value={webUrl}
-                  readOnly
-                  rows={2}
-                  style={{ marginTop: 8 }}
-                />
+                <Space wrap style={{ marginBottom: 12 }}>
+                  <Button type="primary" icon={<GlobalOutlined />} onClick={() => openWebDesktop(false)}>
+                    打开
+                  </Button>
+                  <Button icon={<ReloadOutlined />} onClick={() => openWebDesktop(false)}>
+                    重连
+                  </Button>
+                  <Button icon={<FullscreenOutlined />} onClick={() => openWebDesktop(true)}>
+                    全屏窗口
+                  </Button>
+                  <Button icon={<CopyOutlined />} onClick={() => copyText(webUrl, "Web URL")}>
+                    复制链接
+                  </Button>
+                </Space>
+                <CopyField label="Web URL" value={webUrl} />
               </>
             ) : (
               <Empty description="该桌面不支持浏览器访问" />
@@ -973,18 +1015,37 @@ const fetchDesktops = async () => {
       >
         <Form form={form} layout="vertical" onFinish={handleApply}>
           <Form.Item name="host_id" label="运行节点" initialValue="auto" rules={[{ required: true }]}>
-            <Select placeholder="请选择运行节点">
-              <Select.Option value="auto">自动调度（推荐）</Select.Option>
-              {availableHosts.map((host) => (
-                <Select.Option
-                  key={host.id}
-                  value={host.id}
-                  disabled={!host.ready || !host.current_user_exists}
-                >
-                  {host.hostname} · {host.ip_address} · {host.agent_managed ? "Agent" : "SSH"}（{host.current_sessions}/{host.max_sessions}）
-                  {!host.current_user_exists ? " · 当前用户不存在" : !host.ready ? " · 节点未就绪" : ""}
-                </Select.Option>
-              ))}
+            <Select placeholder="请选择运行节点" optionLabelProp="label">
+              <Select.Option value="auto" label="自动调度（推荐）">
+                <Space direction="vertical" size={0}>
+                  <Text strong>自动调度（推荐）</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>按节点负载和可用性自动选择</Text>
+                </Space>
+              </Select.Option>
+              {availableHosts.map((host) => {
+                const reason = hostDisabledReason(host);
+                const loadText = `${host.current_sessions}/${host.max_sessions}`;
+                return (
+                  <Select.Option
+                    key={host.id}
+                    value={host.id}
+                    label={`${host.hostname} · ${host.ip_address}`}
+                    disabled={!!reason}
+                  >
+                    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                      <Space wrap size={6}>
+                        <Text strong>{host.hostname}</Text>
+                        <Tag color={host.agent_managed ? "purple" : "default"}>{host.agent_managed ? "Agent" : "SSH"}</Tag>
+                        <Tag color={reason ? "red" : "green"}>{reason ? "不可用" : "可用"}</Tag>
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {host.ip_address} · {host.region || "默认区域"}/{host.az || "默认可用区"} · 负载 {loadText} · {host.cpu_cores || "-"}C/{formatMemory(host.total_ram_mb)}
+                      </Text>
+                      {reason && <Text type="danger" style={{ fontSize: 12 }}>{reason}</Text>}
+                    </Space>
+                  </Select.Option>
+                );
+              })}
             </Select>
           </Form.Item>
           <Form.Item name="desktop_env" label="桌面环境" initialValue="gnome" rules={[{ required: true }]}>

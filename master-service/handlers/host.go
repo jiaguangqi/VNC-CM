@@ -200,6 +200,8 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 		CurrentSessions int      `json:"current_sessions"`
 		Region          string   `json:"region"`
 		AZ              string   `json:"az"`
+		CPUCores        int      `json:"cpu_cores"`
+		TotalRAMMB      int64    `json:"total_ram_mb"`
 		Ready           bool     `json:"ready"`
 		UserExists      bool     `json:"current_user_exists"`
 		Missing         []string `json:"missing,omitempty"`
@@ -221,6 +223,8 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 			CurrentSessions: host.CurrentSessions,
 			Region:          host.Region,
 			AZ:              host.AZ,
+			CPUCores:        host.CPUCores,
+			TotalRAMMB:      host.TotalRAMMB,
 			Ready:           readiness.Ready,
 			UserExists:      readiness.CurrentUserExists,
 			Missing:         readiness.Missing,
