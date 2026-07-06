@@ -380,6 +380,94 @@
    git commit -m "feat: improve desktop node picker"
    ```
 
+## Phase 8: VNC Bandwidth and Performance Optimization
+
+### Task 17: Add VNC Performance Profiles
+
+**Goal:** Reduce network bandwidth for users on weak links while keeping a high-quality option for LAN users.
+
+**Files:**
+- Modify: `master-service/handlers/desktop.go`
+- Modify: `master-service/models/models.go`
+- Modify: `frontend/src/pages/DesktopsPage.tsx`
+- Modify: `README.md`
+
+**Steps:**
+1. Add a `performance_profile` request field with values `quality`, `balanced`, and `low_bandwidth`.
+2. Keep `balanced` as the default.
+3. Map profiles to resolution, color depth, desktop environment hints, and VNC backend-specific startup options where supported.
+4. In the frontend create-desktop form, add a profile selector with `均衡` as default.
+5. Document what each profile changes.
+6. Run validation commands.
+7. Commit:
+   ```bash
+   git add master-service/handlers/desktop.go master-service/models/models.go frontend/src/pages/DesktopsPage.tsx README.md
+   git commit -m "feat: add VNC performance profiles"
+   ```
+
+### Task 18: Add Lightweight Desktop Defaults
+
+**Goal:** Reduce continuous screen updates caused by heavy desktop effects.
+
+**Files:**
+- Modify: `master-service/handlers/desktop.go`
+- Modify: `README.md`
+
+**Steps:**
+1. Prefer XFCE for `low_bandwidth` unless the user explicitly selects another desktop environment.
+2. Add xstartup templates that disable compositing or heavy visual effects when possible.
+3. Keep GNOME available for users who need it.
+4. Run validation commands.
+5. Commit:
+   ```bash
+   git add master-service/handlers/desktop.go README.md
+   git commit -m "feat: prefer lightweight desktops for low bandwidth sessions"
+   ```
+
+### Task 19: Add Per-Session Bandwidth Visibility
+
+**Goal:** Make VNC bandwidth usage measurable instead of anecdotal.
+
+**Files:**
+- Modify: `host-agent/agent/agent.go`
+- Modify: `master-service/models/models.go`
+- Modify: `master-service/grpc/server.go`
+- Modify: `master-service/handlers/stats.go`
+- Modify: `frontend/src/pages/DashboardPage.tsx`
+- Modify: `frontend/src/pages/DesktopsPage.tsx`
+
+**Steps:**
+1. Track per-session network bytes where the process ownership and ports can be identified safely.
+2. Report session bandwidth from Host Agent to Master.
+3. Store recent bandwidth samples or aggregate counters.
+4. Show current bandwidth and peak bandwidth in desktop cards/details.
+5. Add dashboard summary for top bandwidth sessions.
+6. Run validation commands.
+7. Commit:
+   ```bash
+   git add host-agent/agent/agent.go master-service/models/models.go master-service/grpc/server.go master-service/handlers/stats.go frontend/src/pages/DashboardPage.tsx frontend/src/pages/DesktopsPage.tsx
+   git commit -m "feat: show VNC session bandwidth usage"
+   ```
+
+### Task 20: Add Adaptive Low-Bandwidth Recommendations
+
+**Goal:** Help users choose better settings before wasting bandwidth.
+
+**Files:**
+- Modify: `frontend/src/pages/DesktopsPage.tsx`
+- Modify: `master-service/handlers/desktop.go`
+
+**Steps:**
+1. Show estimated bandwidth impact when users pick high resolution, 24-bit color, GNOME, or quality mode.
+2. Recommend `low_bandwidth` when users select remote nodes across regions or when recent session bandwidth is high.
+3. Keep recommendations advisory; do not silently override user choices.
+4. Run validation commands.
+5. Commit:
+   ```bash
+   git add frontend/src/pages/DesktopsPage.tsx master-service/handlers/desktop.go
+   git commit -m "feat: recommend low bandwidth desktop settings"
+   ```
+
 ## Recommended Execution Order
 
 1. Phase 1: lifecycle reliability.
@@ -389,6 +477,7 @@
 5. Phase 5: audit and self-check.
 6. Phase 6: Host Agent lifecycle ownership.
 7. Phase 7: frontend polish.
+8. Phase 8: VNC bandwidth and performance optimization.
 
 ## First Work Item
 
