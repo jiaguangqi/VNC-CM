@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -266,13 +267,13 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 			"status":          models.SessionStatusError,
 			"connection_info": string(errorConnInfoJSON),
 		})
-		_ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
+		_, _ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "启动 VNC 会话失败: " + err.Error(), "session_id": session.ID.String()})
 		return
 	}
 
 	if err := database.DB.Model(&session).Update("status", models.SessionStatusRunning).Error; err != nil {
-		_ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
+		_, _ = h.stopVNCOnHost(host, display, wsPort, linuxUser, vncBackend)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "会话状态更新失败"})
 		return
 	}
@@ -337,7 +338,7 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 	database.DB.Model(&session).Update("status", models.SessionStatusStopping)
 
 	if display > 0 {
-		_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 	}
 
 	database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
@@ -393,7 +394,7 @@ func (h *DesktopHandler) DeleteDesktop(c *gin.Context) {
 		}
 	}
 	if display > 0 && session.Host.ID != uuid.Nil {
-		_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 	}
 
 	if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
@@ -458,7 +459,7 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 		database.DB.Model(&session).Update("status", models.SessionStatusStopping)
 
 		if display > 0 {
-			_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}
 
 		database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
@@ -524,7 +525,7 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 			}
 		}
 		if display > 0 && session.Host.ID != uuid.Nil {
-			_ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
+			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}
 
 		if err := database.DB.Delete(&session).Error; err != nil {
@@ -672,11 +673,24 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 	return nil
 }
 
-// stopVNCOnHost 在宿主机上停止 VNC 会话
-func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, linuxUser, vncBackend string) error {
+type desktopCleanupResult struct {
+	RemoteConnected           bool     `json:"remote_connected"`
+	VNCStopAttempted          bool     `json:"vnc_stop_attempted"`
+	WebsockifyStopAttempted   bool     `json:"websockify_stop_attempted"`
+	VNCStopOutput             string   `json:"vnc_stop_output,omitempty"`
+	WebsockifyStopOutput      string   `json:"websockify_stop_output,omitempty"`
+	NonFatalErrors            []string `json:"non_fatal_errors,omitempty"`
+	TerminalConnectionFailure string   `json:"terminal_connection_failure,omitempty"`
+}
+
+// stopVNCOnHost 在宿主机上停止 VNC 会话。进程不存在视为清理成功，便于重复执行。
+func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, linuxUser, vncBackend string) (desktopCleanupResult, error) {
+	result := desktopCleanupResult{}
+
 	cred, err := h.encryptor.Decrypt(host.SSHCredentialEncrypted)
 	if err != nil {
-		return fmt.Errorf("解密凭据失败: %w", err)
+		result.TerminalConnectionFailure = fmt.Sprintf("解密凭据失败: %v", err)
+		return result, fmt.Errorf("解密凭据失败: %w", err)
 	}
 
 	var authMethods []ssh.AuthMethod
@@ -685,7 +699,8 @@ func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, li
 	} else {
 		signer, err := ssh.ParsePrivateKey([]byte(cred))
 		if err != nil {
-			return fmt.Errorf("解析私钥失败: %w", err)
+			result.TerminalConnectionFailure = fmt.Sprintf("解析私钥失败: %v", err)
+			return result, fmt.Errorf("解析私钥失败: %w", err)
 		}
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
 	}
@@ -704,9 +719,11 @@ func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, li
 
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		return fmt.Errorf("SSH 连接失败: %w", err)
+		result.TerminalConnectionFailure = fmt.Sprintf("SSH 连接失败: %v", err)
+		return result, fmt.Errorf("SSH 连接失败: %w", err)
 	}
 	defer client.Close()
+	result.RemoteConnected = true
 
 	// 停止 vncserver（以目标用户身份）
 	var vncKillPath string
@@ -718,21 +735,33 @@ func (h *DesktopHandler) stopVNCOnHost(host models.Host, display, wsPort int, li
 	stopCmd := fmt.Sprintf("su - %s -c '%s -kill :%d' >/dev/null 2>&1 || true", linuxUser, vncKillPath, display)
 	session, err := client.NewSession()
 	if err != nil {
-		return fmt.Errorf("创建 SSH session 失败: %w", err)
+		result.NonFatalErrors = append(result.NonFatalErrors, fmt.Sprintf("创建 VNC 清理 SSH session 失败: %v", err))
+	} else {
+		result.VNCStopAttempted = true
+		output, cmdErr := session.CombinedOutput(stopCmd)
+		result.VNCStopOutput = strings.TrimSpace(string(output))
+		if cmdErr != nil {
+			result.NonFatalErrors = append(result.NonFatalErrors, fmt.Sprintf("VNC 清理命令异常: %v", cmdErr))
+		}
+		session.Close()
 	}
-	_, _ = session.CombinedOutput(stopCmd)
-	session.Close()
 
 	// 停止 websockify
 	killCmd := fmt.Sprintf("pkill -f 'websockify.*%d' >/dev/null 2>&1 || true", wsPort)
 	session, err = client.NewSession()
 	if err != nil {
-		return fmt.Errorf("创建 SSH session 失败: %w", err)
+		result.NonFatalErrors = append(result.NonFatalErrors, fmt.Sprintf("创建 websockify 清理 SSH session 失败: %v", err))
+		return result, nil
 	}
-	_, _ = session.CombinedOutput(killCmd)
+	result.WebsockifyStopAttempted = true
+	output, cmdErr := session.CombinedOutput(killCmd)
+	result.WebsockifyStopOutput = strings.TrimSpace(string(output))
+	if cmdErr != nil {
+		result.NonFatalErrors = append(result.NonFatalErrors, fmt.Sprintf("websockify 清理命令异常: %v", cmdErr))
+	}
 	session.Close()
 
-	return nil
+	return result, nil
 }
 
 func generateRandomPassword(length int) string {
