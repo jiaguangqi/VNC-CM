@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Card, Col, Row, Space, Tag } from "antd";
 import { DesktopOutlined, CloudServerOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined, ThunderboltOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import { statsAPI } from "../api";

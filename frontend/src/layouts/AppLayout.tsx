@@ -6,7 +6,6 @@ import {
   CloudServerOutlined,
   DashboardOutlined,
   LogoutOutlined,
-  SettingOutlined,
   UserOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -54,15 +53,6 @@ const AppLayout: React.FC = () => {
       icon: <DesktopOutlined />,
       label: <Link to="/desktops">桌面管理</Link>,
     },
-    ...(isAdmin
-      ? [
-          {
-            key: "/settings",
-            icon: <SettingOutlined />,
-            label: <Link to="/settings">系统设置</Link>,
-          },
-        ]
-      : []),
   ];
 
   const pageMeta = useMemo(() => {
@@ -70,12 +60,6 @@ const AppLayout: React.FC = () => {
       return {
         title: "宿主机管理",
         subtitle: "统一管理远程桌面承载节点、容量状态与维护操作。",
-      };
-    }
-    if (location.pathname.startsWith("/settings")) {
-      return {
-        title: "系统设置",
-        subtitle: "集中维护 LDAP、认证与平台接入参数。",
       };
     }
     if (location.pathname.startsWith("/desktops/")) {

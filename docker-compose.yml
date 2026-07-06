@@ -40,6 +40,9 @@ services:
       JWT_ISSUER: remote-desktop-platform
       CREDENTIAL_MASTER_KEY: must-be-32-bytes-for-aes256-gcm!
       HTTP_PORT: :8080
+      SYSTEM_SHADOW_FILE: /host/etc/shadow
+    volumes:
+      - /etc/shadow:/host/etc/shadow:ro
     ports:
       - "8080:8080"
     depends_on:
@@ -53,18 +56,14 @@ services:
     networks:
       - rdp-network
 
-  # 前端 React 应用（开发模式）
+  # 前端 React 应用（生产静态服务）
   frontend:
-    image: node:20-alpine
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: rdp-frontend
-    working_dir: /app
-    volumes:
-      - ./frontend:/app
-    command: sh -c "npm install && npm run dev -- --host"
     ports:
-      - "3000:3000"
-    environment:
-      - VITE_API_BASE_URL=/api/v1
+      - "3000:80"
     depends_on:
       - master-service
     networks:

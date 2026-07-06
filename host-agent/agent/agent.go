@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
+	"os"
 	"os/user"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"net"
 )
 
 // Config Host Agent 配置
@@ -34,14 +36,15 @@ type Agent struct {
 	stopCh     chan struct{}
 	started    bool
 	seq        int64
+	failOnce   sync.Once
 }
 
 // protocol message types (对齐 master-service/grpc/server.go)
 type agentMessage struct {
-	Type     string          `json:"type"`
-	HostID   string          `json:"host_id,omitempty"`
-	Timestamp int64          `json:"timestamp"`
-	Payload  json.RawMessage `json:"payload"`
+	Type      string          `json:"type"`
+	HostID    string          `json:"host_id,omitempty"`
+	Timestamp int64           `json:"timestamp"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 type registerPayload struct {
@@ -206,7 +209,7 @@ func (a *Agent) sendHeartbeat() {
 		Payload:   payload,
 	}
 	if err := a.conn.WriteJSON(msg); err != nil {
-		log.Printf("发送心跳失败: %v", err)
+		a.failConnection("发送心跳失败", err)
 	}
 }
 
@@ -228,7 +231,7 @@ func (a *Agent) sendResourceReport() {
 		Payload:   payload,
 	}
 	if err := a.conn.WriteJSON(msg); err != nil {
-		log.Printf("发送资源报告失败: %v", err)
+		a.failConnection("发送资源报告失败", err)
 	}
 }
 
@@ -245,14 +248,22 @@ func (a *Agent) instructionLoop() {
 				case <-a.stopCh:
 					return
 				default:
-					log.Printf("读取指令失败: %v", err)
-					time.Sleep(2 * time.Second)
-					continue
+					a.failConnection("读取指令失败", err)
 				}
 			}
 			a.handleInstruction(&inst)
 		}
 	}
+}
+
+func (a *Agent) failConnection(context string, err error) {
+	a.failOnce.Do(func() {
+		log.Printf("%s: %v; 退出并等待 systemd 重启重连", context, err)
+		if a.conn != nil {
+			_ = a.conn.Close()
+		}
+		os.Exit(1)
+	})
 }
 
 // handleInstruction 处理 Master 下发的指令

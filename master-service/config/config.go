@@ -13,7 +13,6 @@ type Config struct {
 	Server     ServerConfig     // HTTP/gRPC 服务配置
 	JWT        JWTConfig        // JWT 令牌配置
 	Encryption EncryptionConfig // 加密凭据配置
-	LDAP       LDAPConfig       // LDAP 集成配置（可选）
 }
 
 // DatabaseConfig PostgreSQL 配置
@@ -36,25 +35,15 @@ type ServerConfig struct {
 
 // JWTConfig JWT 签发配置
 type JWTConfig struct {
-	Secret         string // 签名密钥
-	AccessExpiry   int    // Access Token 有效期（分钟）
-	RefreshExpiry  int    // Refresh Token 有效期（天）
-	Issuer         string // 签发者标识
+	Secret        string // 签名密钥
+	AccessExpiry  int    // Access Token 有效期（分钟）
+	RefreshExpiry int    // Refresh Token 有效期（天）
+	Issuer        string // 签发者标识
 }
 
 // EncryptionConfig AES-256-GCM 凭据加密配置
 type EncryptionConfig struct {
 	MasterKey string // 从环境变量 CREDENTIAL_MASTER_KEY 读取
-}
-
-// LDAPConfig LDAP/AD 对接配置
-type LDAPConfig struct {
-	Enabled    bool   // 是否启用 LDAP
-	ServerURL  string // ldap:// 或 ldaps://
-	BindDN     string // 绑定 DN
-	BindPass   string // 绑定密码
-	BaseDN     string // 搜索 Base DN
-	UserFilter string // 用户搜索过滤器，如 (uid=%s)
 }
 
 // Load 从环境变量加载配置
@@ -83,14 +72,6 @@ func Load() *Config {
 		Encryption: EncryptionConfig{
 			MasterKey: getEnv("CREDENTIAL_MASTER_KEY", ""),
 		},
-		LDAP: LDAPConfig{
-			Enabled:    getBoolEnv("LDAP_ENABLED", false),
-			ServerURL:  getEnv("LDAP_SERVER_URL", ""),
-			BindDN:     getEnv("LDAP_BIND_DN", ""),
-			BindPass:   getEnv("LDAP_BIND_PASS", ""),
-			BaseDN:     getEnv("LDAP_BASE_DN", ""),
-			UserFilter: getEnv("LDAP_USER_FILTER", "(uid=%s)"),
-		},
 	}
 }
 
@@ -105,15 +86,6 @@ func getIntEnv(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
-		}
-	}
-	return defaultVal
-}
-
-func getBoolEnv(key string, defaultVal bool) bool {
-	if v := os.Getenv(key); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
 		}
 	}
 	return defaultVal

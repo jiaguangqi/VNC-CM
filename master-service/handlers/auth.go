@@ -10,19 +10,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/remote-desktop/master-service/config"
 	"github.com/remote-desktop/master-service/database"
 	"github.com/remote-desktop/master-service/middleware"
 	"github.com/remote-desktop/master-service/models"
 )
 
 type AuthHandler struct {
-	jwt    *middleware.JWTMiddleware
-	config *config.LDAPConfig
+	jwt *middleware.JWTMiddleware
 }
 
-func NewAuthHandler(jwtCfg *middleware.JWTMiddleware, ldapCfg *config.LDAPConfig) *AuthHandler {
-	return &AuthHandler{jwt: jwtCfg, config: ldapCfg}
+func NewAuthHandler(jwtCfg *middleware.JWTMiddleware) *AuthHandler {
+	return &AuthHandler{jwt: jwtCfg}
 }
 
 type RegisterRequest struct {
@@ -74,7 +72,7 @@ func (h *AuthHandler) issueToken(c *gin.Context, user models.User) {
 		RefreshToken: refreshToken,
 		TokenType:    "Bearer",
 		ExpiresAt:    time.Now().Add(time.Duration(accessExpiry) * time.Minute),
-		User: UserInfo{ID: user.ID.String(), Username: user.Username, Role: user.Role, Source: user.Source},
+		User:         UserInfo{ID: user.ID.String(), Username: user.Username, Role: user.Role, Source: user.Source},
 	})
 }
 
@@ -140,11 +138,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				database.DB.Model(&user).Update("password_hash", string(newHash))
 			}
 		}
-	case "ldap":
-		c.JSON(http.StatusNotImplemented, gin.H{"error": "LDAP 登录暂未实现"})
-		return
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "未知的用户来源"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "仅支持本地用户或操作系统用户登录"})
 		return
 	}
 

@@ -80,12 +80,6 @@ export const fileAPI = {
     api.post(`/desktops/${desktopId}/mkdir`, { path }),
 };
 
-export const settingsAPI = {
-  getLDAP: () => api.get('/settings/ldap'),
-  updateLDAP: (data: any) => api.post('/settings/ldap', data),
-  testLDAP: () => api.post('/settings/ldap/test'),
-};
-
 export const collaborationAPI = {
   listInvited: () => api.get('/collaborations/invited'),
   listMyInvites: () => api.get('/collaborations'),
@@ -94,8 +88,8 @@ export const collaborationAPI = {
 };
 
 export const statsAPI = {
-  overview: () => api.get('/stats/overview'),
-  trend: (days: number = 7) => api.get('/stats/trend', { params: { days } }),
+  overview: () => api.get('/dashboard/overview'),
+  trend: (days: number = 7) => api.get('/dashboard/trend', { params: { days } }),
 };
 
 export default api;

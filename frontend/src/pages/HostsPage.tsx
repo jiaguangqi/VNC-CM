@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col, Typography } from "antd";
+import { Table, Button, Tag, Space, Modal, Form, Input, message, Alert, Descriptions, Popconfirm, Card, Row, Col } from "antd";
 import { PlusOutlined, EyeOutlined, DeleteOutlined, ToolOutlined, ExclamationCircleOutlined, MonitorOutlined, EditOutlined } from "@ant-design/icons";
 import { hostAPI } from "../api";
-
-const { Text } = Typography;
 
 interface HostRecord {
   id: string;
@@ -391,7 +389,7 @@ const HostsPage: React.FC = () => {
         destroyOnClose
       >
         <iframe
-          src="http://10.10.38.148:7681"
+          src={`http://${currentHost?.ip_address}:7681`}
           style={{ width: "100%", height: "100%", border: "none", background: "#1e1e1e" }}
           title="WebSSH Terminal"
         />

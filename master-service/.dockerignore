@@ -1,0 +1,8 @@
+master-service
+*.test
+*.out
+*.bak
+*.bak.*
+*.bak_*
+tmp/
+.git/

@@ -164,17 +164,27 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		return
 	}
 
-	var host models.Host
+	var hosts []models.Host
 	if err := database.DB.Where("status = ? AND current_sessions < max_sessions", "healthy").
 		Order("current_sessions ASC").
-		First(&host).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前无可用宿主机，请稍后再试"})
-			return
-		}
+		Find(&hosts).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "宿主机查询失败"})
 		return
 	}
+
+	if len(hosts) == 0 {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前无可用宿主机，请稍后再试"})
+		return
+	}
+
+	minSessions := hosts[0].CurrentSessions
+	var candidates []models.Host
+	for _, h := range hosts {
+		if h.CurrentSessions == minSessions {
+			candidates = append(candidates, h)
+		}
+	}
+	host := candidates[rand.Intn(len(candidates))]
 
 	if host.SSHUsername == "" || host.SSHCredentialEncrypted == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "宿主机 SSH 凭据未配置，无法创建桌面"})
@@ -199,7 +209,7 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 
 	vncBackend := req.VncBackend
 	if vncBackend == "" {
-		vncBackend = "turbovnc"
+		vncBackend = "tigervnc"
 	}
 
 	if err := h.startVNCOnHost(host, display, port, wsPort, req.Resolution, vncPassword, linuxUser, desktopEnv, vncBackend); err != nil {
@@ -541,7 +551,7 @@ func (h *DesktopHandler) startVNCOnHost(host models.Host, display, port, wsPort 
 
 	var startCmdTemplate string
 	if vncBackend == "tigervnc" {
-		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth 24 -localhost no -SecurityTypes VncAuth >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
+		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth 24 -SecurityTypes VncAuth >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
 	} else {
 		startCmdTemplate = fmt.Sprintf("su - %s -c '%s :%%d -geometry %%s -depth 24 -securitytypes None,Vnc >/dev/null 2>&1 && echo success'", linuxUser, vncBin)
 	}

@@ -32,7 +32,7 @@ interface FileTransferState {
 let idSeq = 0;
 const genId = () => `t_${Date.now()}_${++idSeq}`;
 
-export const useFileTransferStore = create<FileTransferState>()((set, get) => ({
+export const useFileTransferStore = create<FileTransferState>()((set) => ({
   visible: false,
   minimized: false,
   desktopId: null,

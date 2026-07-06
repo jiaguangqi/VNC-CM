@@ -3,12 +3,11 @@ import { Badge, Tooltip, Button, Progress } from "antd";
 import {
   CloudUploadOutlined,
   CloudDownloadOutlined,
-  CloseOutlined,
 } from "@ant-design/icons";
 import { useFileTransferStore } from "../stores/fileTransferStore";
 
 const FloatingTransferStatus: React.FC = () => {
-  const { visible, minimized, restore, close, tasks } =
+  const { visible, minimized, restore, tasks } =
     useFileTransferStore();
 
   // 如果没有任务且窗口已关闭，不显示

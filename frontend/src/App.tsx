@@ -6,7 +6,6 @@ import DashboardPage from "./pages/DashboardPage";
 import HostsPage from "./pages/HostsPage";
 import DesktopsPage from "./pages/DesktopsPage";
 import DesktopViewerPage from "./pages/DesktopViewerPage";
-import SystemSettingsPage from "./pages/SystemSettingsPage";
 
 const App: React.FC = () => {
   return (
@@ -18,8 +17,8 @@ const App: React.FC = () => {
         <Route path="hosts" element={<HostsPage />} />
         <Route path="desktops" element={<DesktopsPage />} />
         <Route path="desktops/:id" element={<DesktopViewerPage />} />
-        <Route path="settings" element={<SystemSettingsPage />} />
       </Route>
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 };

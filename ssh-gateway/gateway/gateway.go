@@ -3,7 +3,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,23 +31,23 @@ type SSHGateway struct {
 
 // TicketInfo 从 Master 下发的连接票据信息
 type TicketInfo struct {
-	HostIP       string `json:"host_ip"`
-	Port         int    `json:"port"`
-	Username     string `json:"username"`
-	AuthType     string `json:"auth_type"`     // password / key
-	Credential   string `json:"credential"`    // 解密后的密码或私钥（仅内存持有）
-	PublicKey    string `json:"public_key"`    // 公钥指纹
-	ExpiresAt    int64  `json:"expires_at"`    // Unix timestamp
-	AdminID      string `json:"admin_id"`
+	HostIP     string `json:"host_ip"`
+	Port       int    `json:"port"`
+	Username   string `json:"username"`
+	AuthType   string `json:"auth_type"`  // password / key
+	Credential string `json:"credential"` // 解密后的密码或私钥（仅内存持有）
+	PublicKey  string `json:"public_key"` // 公钥指纹
+	ExpiresAt  int64  `json:"expires_at"` // Unix timestamp
+	AdminID    string `json:"admin_id"`
 }
 
 // ConnectionTicketClaims JWT 中的 claims
 type ConnectionTicketClaims struct {
-	HostID    string `json:"host_id"`
-	AdminID   string `json:"admin_id"`
-	Username  string `json:"username"`
-	AuthType  string `json:"auth_type"`
-	TicketID  string `json:"ticket_id"`
+	HostID   string `json:"host_id"`
+	AdminID  string `json:"admin_id"`
+	Username string `json:"username"`
+	AuthType string `json:"auth_type"`
+	TicketID string `json:"ticket_id"`
 	jwt.RegisteredClaims
 }
 

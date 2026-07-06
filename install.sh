@@ -145,6 +145,9 @@ HTTP_PORT=8080
 SSH_GATEWAY_PORT=8082
 PROTOCOL_GATEWAY_PORT=8083
 
+# 操作系统用户认证（容器内读取的 shadow 文件路径）
+SYSTEM_SHADOW_FILE=/host/etc/shadow
+
 # 前端 API 地址
 VITE_API_BASE_URL=http://localhost:8080/api/v1
 ENV_EOF

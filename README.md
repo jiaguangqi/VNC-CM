@@ -19,7 +19,7 @@
 
 ## 项目简介
 
-VNC CLuster Mnagaer Platform 是一个面向企业级场景的远程桌面协同办公平台。它提供了基于 Web 的远程桌面访问、多用户协同操作、文件传输、宿主机统一管理等功能，支持在现代浏览器中直接访问远程桌面，无需安装额外的客户端软件。
+VNC Cluster Manager Platform 是一个纯单机部署的远程桌面协同办公平台。它提供基于 Web 的远程桌面访问、多用户协同操作、文件传输、宿主机统一管理等功能，支持本地数据库用户和服务器操作系统用户登录，适合在单台服务器上直接运行。
 
 ### 主要应用场景
 
@@ -34,7 +34,7 @@ VNC CLuster Mnagaer Platform 是一个面向企业级场景的远程桌面协同
 
 | 功能模块 | 描述 | 状态 |
 |---------|------|------|
-| 🔐 **用户认证** | JWT Token 认证，支持 LDAP 集成，细粒度权限控制 | ✅ 已完成 |
+| 🔐 **用户认证** | JWT Token 认证，支持本地数据库用户与操作系统用户登录 | ✅ 已完成 |
 | 🖥️ **远程桌面** | 基于 noVNC 的 Web VNC 客户端，支持全屏、缩放、剪贴板 | ✅ 已完成 |
 | 👥 **协同会话** | 多用户同时接入同一桌面，支持观察者/操作者模式 | ✅ 已完成 |
 | 📁 **文件传输** | Web 端文件上传下载，支持文件夹批量传输 | ✅ 已完成 |
@@ -56,7 +56,7 @@ VNC CLuster Mnagaer Platform 是一个面向企业级场景的远程桌面协同
 
 | 层级 | 技术选型 | 说明 |
 |------|---------|------|
-| **前端** | React 18 + TypeScript + Vite + Ant Design 5 | 现代化 SPA，响应式布局 |
+| **前端** | React 18 + TypeScript + Vite + Ant Design 5 + Nginx | 现代化 SPA，生产环境静态服务 |
 | **后端 API** | Go 1.23 + Gin + GORM | 高性能 HTTP API 服务 |
 | **实时通信** | WebSocket (gorilla/websocket) | 全双工长连接 |
 | **数据库** | PostgreSQL 16 | 关系型数据持久化 |
@@ -161,6 +161,9 @@ HTTP_PORT=8080
 SSH_GATEWAY_PORT=8082
 PROTOCOL_GATEWAY_PORT=8083
 
+# 操作系统用户认证（Docker Compose 默认挂载 /etc/shadow 到该路径）
+SYSTEM_SHADOW_FILE=/host/etc/shadow
+
 # 前端 API 地址
 VITE_API_BASE_URL=http://localhost:8080/api/v1
 ```
@@ -179,7 +182,7 @@ docker compose up -d postgres
 # 3. 启动主服务
 docker compose up -d master-service
 
-# 4. 启动前端
+# 4. 启动前端（Nginx 静态服务）
 docker compose up -d frontend
 
 # 5. 查看服务状态
@@ -193,7 +196,8 @@ docker compose logs -f master-service
 2. **启用 TLS** — 配置 Nginx 反向代理并启用 HTTPS
 3. **修改默认密码** — 所有默认密钥和数据库密码必须修改
 4. **配置防火墙** — 仅开放 3000 (前端)、8080 (API)、8082 (SSH) 等必要端口
-5. **日志收集** — 接入 ELK/Loki 进行日志聚合与分析
+5. **限制主机文件访问** — 操作系统用户登录需要只读挂载 `/etc/shadow`，请严格控制 Master Service 容器权限
+6. **日志收集** — 接入 ELK/Loki 进行日志聚合与分析
 
 ---
 
@@ -288,8 +292,7 @@ remote-desktop-platform/
 │   │   │   ├── DashboardPage.tsx
 │   │   │   ├── HostsPage.tsx
 │   │   │   ├── DesktopsPage.tsx
-│   │   │   ├── DesktopViewerPage.tsx
-│   │   │   └── SystemSettingsPage.tsx
+│   │   │   └── DesktopViewerPage.tsx
 │   │   ├── stores/               # Zustand 状态管理
 │   │   └── styles/               # 全局样式
 │   ├── package.json
@@ -312,6 +315,7 @@ remote-desktop-platform/
 │   ├── services/                 # 业务逻辑服务
 │   │   ├── encryption.go         # 加密服务
 │   │   └── scheduler.go          # 调度器
+│   ├── auth-helper.py            # 操作系统用户密码校验辅助脚本
 │   ├── Dockerfile
 │   └── main.go
 │
@@ -333,7 +337,6 @@ remote-desktop-platform/
 │
 ├── 📄 docker-compose.yml         # Docker Compose 部署配置
 ├── 📄 install.sh                 # 一键部署脚本
-├── 📄 auth-helper.py             # 认证辅助脚本
 ├── 📄 .env                       # 环境变量模板
 └── 📄 README.md                  # 本文档
 ```
@@ -358,8 +361,7 @@ Master Service 通过环境变量进行配置，支持以下配置项：
 | `JWT_REFRESH_EXPIRY` | `7` | — | Refresh Token 有效期（天） |
 | `CREDENTIAL_MASTER_KEY` | — | ✅ | AES 加密主密钥（32 字节） |
 | `HTTP_PORT` | `8080` | — | HTTP 服务端口 |
-| `LDAP_HOST` | — | — | LDAP 服务器地址 |
-| `LDAP_BASE_DN` | — | — | LDAP 基础 DN |
+| `SYSTEM_SHADOW_FILE` | `/etc/shadow` | — | 操作系统用户认证读取的 shadow 文件路径 |
 
 ### Host Agent 配置
 

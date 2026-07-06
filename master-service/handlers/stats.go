@@ -97,7 +97,7 @@ type TrendResponse struct {
 	Data []TrendData `json:"data"`
 }
 
-// GetTrend 获取趋势数据
+// GetTrend 获取趋势数据 —— 统计每天结束时的在线资源数
 func (h *StatsHandler) GetTrend(c *gin.Context) {
 	daysStr := c.DefaultQuery("days", "7")
 	days, err := strconv.Atoi(daysStr)

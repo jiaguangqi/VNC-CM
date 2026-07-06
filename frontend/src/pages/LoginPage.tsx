@@ -12,14 +12,11 @@ import { authAPI } from "../api";
 
 const { Title, Text } = Typography;
 
-type LoginMode = "local" | "ldap";
-
 const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const { setToken, setUser } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [lastError, setLastError] = useState("");
-  const [loginMode, setLoginMode] = useState<LoginMode>("local");
   const [viewportWidth, setViewportWidth] = useState<number>(
     typeof window === "undefined" ? 1440 : window.innerWidth
   );
@@ -146,8 +143,6 @@ const LoginPage: React.FC = () => {
     }
   };
 
-  const actionText = loginMode === "ldap" ? "LDAP 用户登陆" : "登录";
-
   return (
     <div style={styles.page}>
       <div style={styles.panel}>
@@ -178,7 +173,7 @@ const LoginPage: React.FC = () => {
             rules={[
               {
                 required: true,
-                message: loginMode === "ldap" ? "请输入 LDAP 用户名" : "请输入用户名",
+                message: "请输入用户名",
               },
             ]}
           >
@@ -206,24 +201,10 @@ const LoginPage: React.FC = () => {
 
           <Form.Item style={{ marginBottom: 0 }}>
             <Button type="primary" htmlType="submit" loading={loading} block style={styles.primaryButton}>
-              {actionText}
+              登录
             </Button>
           </Form.Item>
         </Form>
-
-        <div style={styles.dividerRow}>
-          <div style={styles.dividerLine} />
-          <span>其他登录方式</span>
-          <div style={styles.dividerLine} />
-        </div>
-
-        <Button
-          block
-          style={styles.secondaryButton}
-          onClick={() => setLoginMode((mode) => (mode === "local" ? "ldap" : "local"))}
-        >
-          {loginMode === "ldap" ? "本地用户登录" : "LDAP 用户登陆"}
-        </Button>
 
         <div style={styles.footer}>
           还没有账号? <span style={{ color: "#2d7cff", fontWeight: 600 }}>联系管理员</span> 获取访问权限

@@ -41,7 +41,7 @@ func main() {
 	jwtMiddleware := middleware.NewJWTMiddleware(cfg.JWT.Secret, cfg.JWT.Issuer)
 
 	// 初始化处理器
-	authHandler := handlers.NewAuthHandler(jwtMiddleware, &cfg.LDAP)
+	authHandler := handlers.NewAuthHandler(jwtMiddleware)
 	hostHandler := handlers.NewHostHandler(encryptor)
 	desktopHandler := handlers.NewDesktopHandler(encryptor)
 	statsHandler := handlers.NewStatsHandler()
@@ -79,23 +79,23 @@ func main() {
 		authorized.POST("/desktops/batch/terminate", desktopHandler.BatchTerminateDesktops)
 		authorized.POST("/desktops/batch/delete", desktopHandler.BatchDeleteDesktops)
 
-	// 文件传输
-	fileHandler := handlers.NewFileHandler(encryptor)
-	authorized.GET("/desktops/:id/files", fileHandler.ListFiles)
-	authorized.POST("/desktops/:id/upload", fileHandler.UploadFile)
-	authorized.GET("/desktops/:id/download", fileHandler.DownloadFile)
-	authorized.DELETE("/desktops/:id/files", fileHandler.DeleteFile)
-	authorized.POST("/desktops/:id/mkdir", fileHandler.Mkdir)
+		// 文件传输
+		fileHandler := handlers.NewFileHandler(encryptor)
+		authorized.GET("/desktops/:id/files", fileHandler.ListFiles)
+		authorized.POST("/desktops/:id/upload", fileHandler.UploadFile)
+		authorized.GET("/desktops/:id/download", fileHandler.DownloadFile)
+		authorized.DELETE("/desktops/:id/files", fileHandler.DeleteFile)
+		authorized.POST("/desktops/:id/mkdir", fileHandler.Mkdir)
 
 		// 协同协助（需要认证）
-			authorized.GET("/collaborations/invited", collabHandler.ListInvited)
-			authorized.GET("/collaborations", collabHandler.ListMyInvites)
-			authorized.POST("/collaborations", collabHandler.Invite)
-			authorized.DELETE("/collaborations/:id", collabHandler.Stop)
+		authorized.GET("/collaborations/invited", collabHandler.ListInvited)
+		authorized.GET("/collaborations", collabHandler.ListMyInvites)
+		authorized.POST("/collaborations", collabHandler.Invite)
+		authorized.DELETE("/collaborations/:id", collabHandler.Stop)
 
 		// 统计数据（需要认证）
-		authorized.GET("/stats/overview", statsHandler.GetOverview)
-		authorized.GET("/stats/trend", statsHandler.GetTrend)
+		authorized.GET("/dashboard/overview", statsHandler.GetOverview)
+		authorized.GET("/dashboard/trend", statsHandler.GetTrend)
 
 		// 宿主机管理（仅管理员）
 		admin := authorized.Group("")

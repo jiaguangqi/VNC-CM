@@ -111,9 +111,11 @@ const FileTransferModal: React.FC = () => {
 
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [newDirName, setNewDirName] = useState("");
-  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
-
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const directoryInputProps = {
+    webkitdirectory: "",
+    directory: "",
+  } as React.InputHTMLAttributes<HTMLInputElement>;
   const winSize = useWindowSize();
 
   /* ---- 自适应尺寸 ---- */
@@ -300,7 +302,6 @@ const FileTransferModal: React.FC = () => {
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
         updateTask(taskId, { progress: 100, status: "done" });
-        setDownloadProgress((prev) => ({ ...prev, [taskId]: 100 }));
       } catch {
         updateTask(taskId, { status: "error", error: "下载失败" });
         message.error(`下载 ${entry.name} 失败`);
@@ -554,8 +555,7 @@ const FileTransferModal: React.FC = () => {
               ref={fileInputRef}
               type="file"
               multiple
-              webkitdirectory=""
-              directory=""
+              {...directoryInputProps}
               style={{ display: "none" }}
               onChange={handleFileInputChange}
             />

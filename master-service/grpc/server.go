@@ -19,22 +19,22 @@ import (
 
 // AgentMessage Host Agent 发来的 JSON 消息
 type AgentMessage struct {
-	HostID   string          `json:"host_id"`
-	Timestamp int64          `json:"timestamp"`
-	Type     string          `json:"type"` // "register" | "heartbeat" | "resource_report" | "desktop_update"
-	Payload  json.RawMessage `json:"payload"`
+	HostID    string          `json:"host_id"`
+	Timestamp int64           `json:"timestamp"`
+	Type      string          `json:"type"` // "register" | "heartbeat" | "resource_report" | "desktop_update"
+	Payload   json.RawMessage `json:"payload"`
 }
 
 // RegisterPayload 注册请求体
 type RegisterPayload struct {
-	Hostname    string   `json:"hostname"`
-	IPAddress   string   `json:"ip_address"`
-	OSType      string   `json:"os_type"`
-	CPUCores    int      `json:"cpu_cores"`
-	TotalRAMMB  int64    `json:"total_ram_mb"`
-	MaxSessions int      `json:"max_sessions"`
-	Region      string   `json:"region"`
-	AZ          string   `json:"az"`
+	Hostname    string `json:"hostname"`
+	IPAddress   string `json:"ip_address"`
+	OSType      string `json:"os_type"`
+	CPUCores    int    `json:"cpu_cores"`
+	TotalRAMMB  int64  `json:"total_ram_mb"`
+	MaxSessions int    `json:"max_sessions"`
+	Region      string `json:"region"`
+	AZ          string `json:"az"`
 }
 
 // HeartbeatPayload 心跳体
@@ -64,8 +64,8 @@ type MasterInstruction struct {
 type HostAgentServer struct {
 	mu         sync.RWMutex
 	upgrader   websocket.Upgrader
-	streams    map[string]*websocket.Conn // host_id -> ws conn
-	hostStatus map[string]string          // host_id -> status
+	streams    map[string]*websocket.Conn         // host_id -> ws conn
+	hostStatus map[string]string                  // host_id -> status
 	cmdQueue   map[string]chan *MasterInstruction // host_id -> 指令队列
 }
 
@@ -73,7 +73,7 @@ type HostAgentServer struct {
 func NewHostAgentServer() *HostAgentServer {
 	return &HostAgentServer{
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
+			CheckOrigin:     func(r *http.Request) bool { return true },
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
 		},
@@ -239,7 +239,7 @@ func (s *HostAgentServer) updateHostStatus(hostID string, activeSessions int) {
 	if err := database.DB.Where("id = ?", hostID).First(&host).Error; err != nil {
 		return
 	}
-	updates := map[string]interface{}{"current_sessions": activeSessions}
+	updates := map[string]interface{}{}
 	if activeSessions >= host.MaxSessions {
 		updates["status"] = "full"
 	} else if host.Status == "full" || host.Status == "offline" {

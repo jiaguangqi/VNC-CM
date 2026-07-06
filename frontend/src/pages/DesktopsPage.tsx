@@ -19,7 +19,6 @@ import {
   Tooltip,
 } from "antd";
 import {
-  DesktopOutlined,
   PlusOutlined,
   PlayCircleOutlined,
   StopOutlined,
@@ -42,7 +41,7 @@ import FloatingTransferStatus from "../components/FloatingTransferStatus";
 import { useFileTransferStore } from "../stores/fileTransferStore";
 import { useAuthStore } from "../stores/authStore";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { TabPane } = Tabs;
 
 interface DesktopSession {
