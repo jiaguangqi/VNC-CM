@@ -164,6 +164,9 @@ PROTOCOL_GATEWAY_PORT=8083
 # 操作系统用户认证（Docker Compose 默认挂载 /etc/shadow 到该路径）
 SYSTEM_SHADOW_FILE=/host/etc/shadow
 
+# 用户配额
+MAX_DESKTOPS_PER_USER=5
+
 # 前端 API 地址
 VITE_API_BASE_URL=http://localhost:8080/api/v1
 ```
@@ -383,6 +386,7 @@ Master Service 通过环境变量进行配置，支持以下配置项：
 | `CREDENTIAL_MASTER_KEY` | — | ✅ | AES 加密主密钥（32 字节） |
 | `HTTP_PORT` | `8080` | — | HTTP 服务端口 |
 | `SYSTEM_SHADOW_FILE` | `/etc/shadow` | — | 操作系统用户认证读取的 shadow 文件路径 |
+| `MAX_DESKTOPS_PER_USER` | `5` | — | 单个用户允许同时处于 starting/running 的最大桌面数，设为 0 表示不限制 |
 
 ### Host Agent 配置
 

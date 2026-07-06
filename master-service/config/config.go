@@ -13,6 +13,7 @@ type Config struct {
 	Server     ServerConfig     // HTTP/gRPC 服务配置
 	JWT        JWTConfig        // JWT 令牌配置
 	Encryption EncryptionConfig // 加密凭据配置
+	Desktop    DesktopConfig    // 桌面会话配置
 }
 
 // DatabaseConfig PostgreSQL 配置
@@ -46,6 +47,11 @@ type EncryptionConfig struct {
 	MasterKey string // 从环境变量 CREDENTIAL_MASTER_KEY 读取
 }
 
+// DesktopConfig 桌面会话配置
+type DesktopConfig struct {
+	MaxDesktopsPerUser int
+}
+
 // Load 从环境变量加载配置
 func Load() *Config {
 	return &Config{
@@ -71,6 +77,9 @@ func Load() *Config {
 		},
 		Encryption: EncryptionConfig{
 			MasterKey: getEnv("CREDENTIAL_MASTER_KEY", ""),
+		},
+		Desktop: DesktopConfig{
+			MaxDesktopsPerUser: getIntEnv("MAX_DESKTOPS_PER_USER", 5),
 		},
 	}
 }

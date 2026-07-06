@@ -20,11 +20,15 @@ import (
 )
 
 type DesktopHandler struct {
-	encryptor *services.EncryptionService
+	encryptor          *services.EncryptionService
+	maxDesktopsPerUser int
 }
 
-func NewDesktopHandler(encryptor *services.EncryptionService) *DesktopHandler {
-	return &DesktopHandler{encryptor: encryptor}
+func NewDesktopHandler(encryptor *services.EncryptionService, maxDesktopsPerUser int) *DesktopHandler {
+	return &DesktopHandler{
+		encryptor:          encryptor,
+		maxDesktopsPerUser: maxDesktopsPerUser,
+	}
 }
 
 type CreateDesktopRequest struct {
@@ -167,6 +171,11 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		return
 	}
 
+	if err := h.ensureUserDesktopQuota(uid); err != nil {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		return
+	}
+
 	var host models.Host
 	if req.HostID != "" {
 		if err := database.DB.
@@ -303,6 +312,23 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 		ConnectionInfo: connInfo,
 		CreatedAt:      session.CreatedAt,
 	})
+}
+
+func (h *DesktopHandler) ensureUserDesktopQuota(userID string) error {
+	if h.maxDesktopsPerUser <= 0 {
+		return nil
+	}
+
+	var count int64
+	if err := database.DB.Model(&models.Session{}).
+		Where("user_id = ? AND status IN ?", userID, []string{models.SessionStatusStarting, models.SessionStatusRunning}).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("查询用户桌面配额失败")
+	}
+	if int(count) >= h.maxDesktopsPerUser {
+		return fmt.Errorf("已达到当前用户最大运行桌面数限制：%d", h.maxDesktopsPerUser)
+	}
+	return nil
 }
 
 func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
