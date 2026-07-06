@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/remote-desktop/master-service/database"
+	agentgrpc "github.com/remote-desktop/master-service/grpc"
 	"github.com/remote-desktop/master-service/models"
 	"github.com/remote-desktop/master-service/services"
 )
@@ -22,12 +23,14 @@ import (
 type DesktopHandler struct {
 	encryptor          *services.EncryptionService
 	maxDesktopsPerUser int
+	agentServer        *agentgrpc.HostAgentServer
 }
 
-func NewDesktopHandler(encryptor *services.EncryptionService, maxDesktopsPerUser int) *DesktopHandler {
+func NewDesktopHandler(encryptor *services.EncryptionService, maxDesktopsPerUser int, agentServer *agentgrpc.HostAgentServer) *DesktopHandler {
 	return &DesktopHandler{
 		encryptor:          encryptor,
 		maxDesktopsPerUser: maxDesktopsPerUser,
+		agentServer:        agentServer,
 	}
 }
 
@@ -269,6 +272,7 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	uidUUID, _ := uuid.Parse(uid)
 	connInfo := map[string]interface{}{
 		"port":     port,
+		"ws_port":  wsPort,
 		"display":  display,
 		"password": vncPassword,
 		"url":      fmt.Sprintf("vnc://%s:%d", host.IPAddress, port),
@@ -289,6 +293,32 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 
 	if err := database.DB.Create(&session).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "会话记录创建失败"})
+		return
+	}
+
+	if h.dispatchCreateToAgentIfOnline(host, session, display, port, wsPort, req.Resolution, colorDepth, vncPassword, linuxUser, desktopEnv, vncBackend) {
+		services.RecordAudit(uid, "desktop_create_dispatch", "session", session.ID.String(), map[string]interface{}{
+			"host_id":   host.ID.String(),
+			"host_name": host.Hostname,
+			"display":   display,
+			"port":      port,
+			"ws_port":   wsPort,
+			"via":       "agent",
+		}, c.ClientIP())
+		c.JSON(http.StatusCreated, DesktopResponse{
+			ID:             session.ID.String(),
+			Protocol:       session.Protocol,
+			VncBackend:     session.VncBackend,
+			Resolution:     session.Resolution,
+			Status:         session.Status,
+			HostID:         host.ID.String(),
+			HostIP:         host.IPAddress,
+			HostName:       host.Hostname,
+			Port:           port,
+			VncPassword:    vncPassword,
+			ConnectionInfo: connInfo,
+			CreatedAt:      session.CreatedAt,
+		})
 		return
 	}
 
@@ -355,6 +385,93 @@ func (h *DesktopHandler) ensureUserDesktopQuota(userID string) error {
 	return nil
 }
 
+func sessionDisplayAndWSPort(session models.Session) (int, int) {
+	var display int
+	var wsPort int
+	if session.ConnectionInfo == "" {
+		return display, wsPort
+	}
+
+	var connInfo map[string]interface{}
+	if err := json.Unmarshal([]byte(session.ConnectionInfo), &connInfo); err != nil {
+		return display, wsPort
+	}
+	if d, ok := connInfo["display"].(float64); ok {
+		display = int(d)
+	}
+	if p, ok := connInfo["ws_port"].(float64); ok {
+		wsPort = int(p)
+	} else if p, ok := connInfo["port"].(float64); ok {
+		wsPort = int(p) + 200
+	}
+	return display, wsPort
+}
+
+func (h *DesktopHandler) dispatchCreateToAgentIfOnline(host models.Host, session models.Session, display, port, wsPort int, resolution string, colorDepth int, password, linuxUser, desktopEnv, vncBackend string) bool {
+	if h.agentServer == nil || !h.agentServer.IsHostOnline(host.ID.String()) {
+		return false
+	}
+
+	payload := map[string]interface{}{
+		"session_id":  session.ID.String(),
+		"username":    linuxUser,
+		"protocol":    session.Protocol,
+		"resolution":  resolution,
+		"color_depth": colorDepth,
+		"display":     display,
+		"port":        port,
+		"ws_port":     wsPort,
+		"password":    password,
+		"desktop_env": desktopEnv,
+		"vnc_backend": vncBackend,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+
+	inst := &agentgrpc.MasterInstruction{
+		InstructionID: uuid.New().String(),
+		Timestamp:     time.Now().Unix(),
+		Type:          "create_desktop",
+		Payload:       payloadJSON,
+	}
+	return h.agentServer.SendInstructionToHost(host.ID.String(), inst) == nil
+}
+
+func (h *DesktopHandler) dispatchTerminateToAgentIfOnline(session models.Session, display, wsPort int) bool {
+	if h.agentServer == nil || !h.agentServer.IsHostOnline(session.HostID.String()) || display <= 0 {
+		return false
+	}
+
+	payload := map[string]interface{}{
+		"session_id":  session.ID.String(),
+		"username":    session.User.Username,
+		"display":     display,
+		"ws_port":     wsPort,
+		"vnc_backend": session.VncBackend,
+		"force":       true,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+
+	inst := &agentgrpc.MasterInstruction{
+		InstructionID: uuid.New().String(),
+		Timestamp:     time.Now().Unix(),
+		Type:          "terminate_desktop",
+		Payload:       payloadJSON,
+	}
+	return h.agentServer.SendInstructionToHost(session.HostID.String(), inst) == nil
+}
+
+func decrementHostSessionIfRunning(host models.Host, previousStatus string) {
+	if previousStatus == models.SessionStatusRunning && host.CurrentSessions > 0 {
+		database.DB.Model(&host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
+	}
+}
+
 func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	uid := userID.(string)
@@ -373,19 +490,7 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 		return
 	}
 
-	var display int
-	var wsPort int
-	if session.ConnectionInfo != "" {
-		var connInfo map[string]interface{}
-		if err := json.Unmarshal([]byte(session.ConnectionInfo), &connInfo); err == nil {
-			if d, ok := connInfo["display"].(float64); ok {
-				display = int(d)
-			}
-			if p, ok := connInfo["port"].(float64); ok {
-				wsPort = int(p) + 200
-			}
-		}
-	}
+	display, wsPort := sessionDisplayAndWSPort(session)
 
 	previousStatus := session.Status
 	if previousStatus == models.SessionStatusTerminated {
@@ -395,15 +500,19 @@ func (h *DesktopHandler) CloseDesktop(c *gin.Context) {
 
 	database.DB.Model(&session).Update("status", models.SessionStatusStopping)
 
+	if h.dispatchTerminateToAgentIfOnline(session, display, wsPort) {
+		decrementHostSessionIfRunning(session.Host, previousStatus)
+		services.RecordAudit(uid, "desktop_close_dispatch", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "via": "agent"}, c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"message": "桌面正在关闭"})
+		return
+	}
+
 	if display > 0 {
 		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 	}
 
 	database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
-
-	if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
-		database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
-	}
+	decrementHostSessionIfRunning(session.Host, previousStatus)
 	services.RecordAudit(uid, "desktop_close", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String()}, c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{"message": "桌面会话已关闭"})
@@ -439,26 +548,21 @@ func (h *DesktopHandler) DeleteDesktop(c *gin.Context) {
 	}
 
 	// 清理宿主机上的残留进程和端口（即使状态是 terminated 也要清理，防止残留）
-	var display int
-	var wsPort int
-	if session.ConnectionInfo != "" {
-		var connInfo map[string]interface{}
-		if err := json.Unmarshal([]byte(session.ConnectionInfo), &connInfo); err == nil {
-			if d, ok := connInfo["display"].(float64); ok {
-				display = int(d)
-			}
-			if p, ok := connInfo["port"].(float64); ok {
-				wsPort = int(p) + 200
-			}
-		}
+	display, wsPort := sessionDisplayAndWSPort(session)
+	if !models.IsTerminalSessionStatus(previousStatus) && h.dispatchTerminateToAgentIfOnline(session, display, wsPort) {
+		decrementHostSessionIfRunning(session.Host, previousStatus)
+		services.RecordAudit(uid, "desktop_delete_dispatch", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "via": "agent"}, c.ClientIP())
+		c.JSON(http.StatusAccepted, gin.H{"message": "桌面正在清理，完成后可删除记录"})
+		return
+	}
+	if models.IsTerminalSessionStatus(previousStatus) {
+		_ = h.dispatchTerminateToAgentIfOnline(session, display, wsPort)
 	}
 	if display > 0 && session.Host.ID != uuid.Nil {
 		_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 	}
 
-	if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
-		database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
-	}
+	decrementHostSessionIfRunning(session.Host, previousStatus)
 
 	if err := database.DB.Delete(&session).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除失败"})
@@ -501,31 +605,24 @@ func (h *DesktopHandler) BatchTerminateDesktops(c *gin.Context) {
 			continue
 		}
 
-		var display int
-		var wsPort int
-		if session.ConnectionInfo != "" {
-			var connInfo map[string]interface{}
-			if err := json.Unmarshal([]byte(session.ConnectionInfo), &connInfo); err == nil {
-				if d, ok := connInfo["display"].(float64); ok {
-					display = int(d)
-				}
-				if p, ok := connInfo["port"].(float64); ok {
-					wsPort = int(p) + 200
-				}
-			}
-		}
+		display, wsPort := sessionDisplayAndWSPort(session)
 
 		previousStatus := session.Status
 		database.DB.Model(&session).Update("status", models.SessionStatusStopping)
+
+		if h.dispatchTerminateToAgentIfOnline(session, display, wsPort) {
+			decrementHostSessionIfRunning(session.Host, previousStatus)
+			services.RecordAudit(uid, "desktop_close_dispatch", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "batch": true, "via": "agent"}, c.ClientIP())
+			success = append(success, id)
+			continue
+		}
 
 		if display > 0 {
 			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}
 
 		database.DB.Model(&session).Update("status", models.SessionStatusTerminated)
-		if previousStatus == models.SessionStatusRunning && session.Host.CurrentSessions > 0 {
-			database.DB.Model(&session.Host).Update("current_sessions", gorm.Expr("current_sessions - 1"))
-		}
+		decrementHostSessionIfRunning(session.Host, previousStatus)
 		services.RecordAudit(uid, "desktop_close", "session", session.ID.String(), map[string]interface{}{"previous_status": previousStatus, "host_id": session.HostID.String(), "batch": true}, c.ClientIP())
 		success = append(success, id)
 	}
@@ -572,19 +669,8 @@ func (h *DesktopHandler) BatchDeleteDesktops(c *gin.Context) {
 		}
 
 		// 清理宿主机残留
-		var display int
-		var wsPort int
-		if session.ConnectionInfo != "" {
-			var connInfo map[string]interface{}
-			if err := json.Unmarshal([]byte(session.ConnectionInfo), &connInfo); err == nil {
-				if d, ok := connInfo["display"].(float64); ok {
-					display = int(d)
-				}
-				if p, ok := connInfo["port"].(float64); ok {
-					wsPort = int(p) + 200
-				}
-			}
-		}
+		display, wsPort := sessionDisplayAndWSPort(session)
+		_ = h.dispatchTerminateToAgentIfOnline(session, display, wsPort)
 		if display > 0 && session.Host.ID != uuid.Nil {
 			_, _ = h.stopVNCOnHost(session.Host, display, wsPort, session.User.Username, session.VncBackend)
 		}

@@ -34,6 +34,7 @@ type Agent struct {
 	hostID     string
 	agentToken string
 	stopCh     chan struct{}
+	writeMu    sync.Mutex
 	started    bool
 	seq        int64
 	failOnce   sync.Once
@@ -84,14 +85,30 @@ type createDesktopPayload struct {
 	Protocol          string `json:"protocol"`
 	Resolution        string `json:"resolution"`
 	ColorDepth        int    `json:"color_depth"`
+	Display           int    `json:"display"`
+	Port              int    `json:"port"`
+	WSPort            int    `json:"ws_port"`
+	Password          string `json:"password"`
+	DesktopEnv        string `json:"desktop_env"`
+	VNCBackend        string `json:"vnc_backend"`
 	TimeoutMinutes    int    `json:"timeout_minutes"`
 	RequireGPU        bool   `json:"require_gpu"`
 	RequestedGPUCount int    `json:"requested_gpu_count"`
 }
 
 type terminateDesktopPayload struct {
+	SessionID  string `json:"session_id"`
+	Username   string `json:"username"`
+	Display    int    `json:"display"`
+	WSPort     int    `json:"ws_port"`
+	VNCBackend string `json:"vnc_backend"`
+	Force      bool   `json:"force"`
+}
+
+type desktopUpdatePayload struct {
 	SessionID string `json:"session_id"`
-	Force     bool   `json:"force"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 }
 
 type registerResponse struct {
@@ -208,7 +225,7 @@ func (a *Agent) sendHeartbeat() {
 		Timestamp: time.Now().Unix(),
 		Payload:   payload,
 	}
-	if err := a.conn.WriteJSON(msg); err != nil {
+	if err := a.writeJSON(msg); err != nil {
 		a.failConnection("发送心跳失败", err)
 	}
 }
@@ -230,8 +247,27 @@ func (a *Agent) sendResourceReport() {
 		Timestamp: time.Now().Unix(),
 		Payload:   payload,
 	}
-	if err := a.conn.WriteJSON(msg); err != nil {
+	if err := a.writeJSON(msg); err != nil {
 		a.failConnection("发送资源报告失败", err)
+	}
+}
+
+func (a *Agent) writeJSON(v interface{}) error {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	return a.conn.WriteJSON(v)
+}
+
+func (a *Agent) sendDesktopUpdate(sessionID, status, errMsg string) {
+	payload, _ := json.Marshal(desktopUpdatePayload{SessionID: sessionID, Status: status, Error: errMsg})
+	msg := agentMessage{
+		Type:      "desktop_update",
+		HostID:    a.hostID,
+		Timestamp: time.Now().Unix(),
+		Payload:   payload,
+	}
+	if err := a.writeJSON(msg); err != nil {
+		a.failConnection("发送桌面状态失败", err)
 	}
 }
 
@@ -277,9 +313,11 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 			log.Printf("解析 create_desktop 失败: %v", err)
 			return
 		}
-		if err := a.CreateDesktop(payload.SessionID, payload.Username, payload.Protocol,
-			payload.Resolution, payload.ColorDepth); err != nil {
+		if err := a.CreateDesktop(payload); err != nil {
 			log.Printf("创建桌面失败: %v", err)
+			a.sendDesktopUpdate(payload.SessionID, "error", err.Error())
+		} else {
+			a.sendDesktopUpdate(payload.SessionID, "running", "")
 		}
 
 	case "terminate_desktop":
@@ -288,8 +326,11 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 			log.Printf("解析 terminate_desktop 失败: %v", err)
 			return
 		}
-		if err := a.TerminateDesktop(payload.SessionID, payload.Force); err != nil {
+		if err := a.TerminateDesktop(payload); err != nil {
 			log.Printf("终止桌面失败: %v", err)
+			a.sendDesktopUpdate(payload.SessionID, "error", err.Error())
+		} else {
+			a.sendDesktopUpdate(payload.SessionID, "terminated", "")
 		}
 
 	case "update_config":
@@ -304,26 +345,24 @@ func (a *Agent) handleInstruction(inst *masterInstruction) {
 // ========= Desktop 生命周期管理（保留） =========
 
 // CreateDesktop 在本地创建远程桌面会话
-func (a *Agent) CreateDesktop(sessionID, username, protocol, resolution string, colorDepth int) error {
-	exists, err := a.ValidateLocalUser(username)
+func (a *Agent) CreateDesktop(payload createDesktopPayload) error {
+	exists, err := a.ValidateLocalUser(payload.Username)
 	if err != nil || !exists {
 		return fmt.Errorf("本地用户校验失败: %w", err)
 	}
 
-	switch protocol {
+	switch payload.Protocol {
 	case "vnc":
-		return a.createVNCDesktop(sessionID, username, resolution, colorDepth)
+		return a.createVNCDesktop(payload)
 	case "rdp":
-		return a.createRDPDesktop(sessionID, username, resolution, colorDepth)
+		return a.createRDPDesktop(payload.SessionID, payload.Username, payload.Resolution, payload.ColorDepth)
 	default:
-		return fmt.Errorf("不支持的协议: %s", protocol)
+		return fmt.Errorf("不支持的协议: %s", payload.Protocol)
 	}
 }
 
-func (a *Agent) createVNCDesktop(sessionID, username, resolution string, colorDepth int) error {
-	log.Printf("[VNC] 创建桌面 session=%s user=%s", sessionID, username)
-	// TODO: systemd-run --uid={username} vncserver...
-	return nil
+func (a *Agent) createVNCDesktop(payload createDesktopPayload) error {
+	return a.createLinuxVNCDesktop(payload)
 }
 
 func (a *Agent) createRDPDesktop(sessionID, username, resolution string, colorDepth int) error {
@@ -333,10 +372,9 @@ func (a *Agent) createRDPDesktop(sessionID, username, resolution string, colorDe
 }
 
 // TerminateDesktop 终止桌面会话
-func (a *Agent) TerminateDesktop(sessionID string, force bool) error {
-	log.Printf("终止桌面 session=%s force=%v", sessionID, force)
-	// TODO: 查找进程并终止
-	return nil
+func (a *Agent) TerminateDesktop(payload terminateDesktopPayload) error {
+	log.Printf("终止桌面 session=%s force=%v", payload.SessionID, payload.Force)
+	return a.terminateLinuxVNCDesktop(payload)
 }
 
 // ValidateLocalUser 校验本地 OS 用户是否存在

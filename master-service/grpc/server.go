@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/remote-desktop/master-service/database"
 	"github.com/remote-desktop/master-service/models"
+	"gorm.io/gorm"
 )
 
 // AgentMessage Host Agent 发来的 JSON 消息
@@ -50,6 +51,12 @@ type ResourceReportPayload struct {
 	GPUUsagePercent      float32 `json:"gpu_usage_percent"`
 	AvailableGPUMemoryMB int64   `json:"available_gpu_memory_mb"`
 	DiskUsagePercent     float32 `json:"disk_usage_percent"`
+}
+
+type DesktopUpdatePayload struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 }
 
 // MasterInstruction Master 下发的指令
@@ -214,9 +221,57 @@ func (s *HostAgentServer) handleAgentMessage(hostID string, msg *AgentMessage) {
 		s.updateHostStatus(hostID, report.ActiveSessions)
 
 	case "desktop_update":
-		// 更新桌面状态
 		log.Printf("桌面更新 host_id=%s payload=%s", hostID, string(msg.Payload))
-		// TODO: 更新 sessions 表
+		s.updateDesktopStatus(hostID, msg.Payload)
+	}
+}
+
+func (s *HostAgentServer) updateDesktopStatus(hostID string, payload json.RawMessage) {
+	var update DesktopUpdatePayload
+	if err := json.Unmarshal(payload, &update); err != nil {
+		log.Printf("桌面更新解析失败 host_id=%s: %v", hostID, err)
+		return
+	}
+
+	var session models.Session
+	if err := database.DB.Where("id = ?", update.SessionID).First(&session).Error; err != nil {
+		log.Printf("桌面更新找不到 session=%s: %v", update.SessionID, err)
+		return
+	}
+
+	previousStatus := session.Status
+	updates := map[string]interface{}{"status": update.Status}
+	if update.Error != "" {
+		var connInfo map[string]interface{}
+		if session.ConnectionInfo != "" {
+			_ = json.Unmarshal([]byte(session.ConnectionInfo), &connInfo)
+		}
+		if connInfo == nil {
+			connInfo = make(map[string]interface{})
+		}
+		connInfo["error"] = update.Error
+		connInfoJSON, _ := json.Marshal(connInfo)
+		updates["connection_info"] = string(connInfoJSON)
+	}
+
+	if err := database.DB.Model(&session).Updates(updates).Error; err != nil {
+		log.Printf("桌面状态更新失败 session=%s: %v", update.SessionID, err)
+		return
+	}
+
+	switch update.Status {
+	case models.SessionStatusRunning:
+		if previousStatus != models.SessionStatusRunning {
+			database.DB.Model(&models.Host{}).
+				Where("id = ? AND current_sessions < max_sessions", hostID).
+				Update("current_sessions", gorm.Expr("current_sessions + 1"))
+		}
+	case models.SessionStatusTerminated, models.SessionStatusError:
+		if previousStatus == models.SessionStatusRunning {
+			database.DB.Model(&models.Host{}).
+				Where("id = ? AND current_sessions > 0", hostID).
+				Update("current_sessions", gorm.Expr("current_sessions - 1"))
+		}
 	}
 }
 
@@ -262,6 +317,13 @@ func (s *HostAgentServer) SendInstructionToHost(hostID string, inst *MasterInstr
 	default:
 		return fmt.Errorf("host %s 指令队列已满", hostID)
 	}
+}
+
+func (s *HostAgentServer) IsHostOnline(hostID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.streams[hostID]
+	return ok
 }
 
 // generateAgentToken 生成随机 Token

@@ -44,7 +44,7 @@ func main() {
 	// 初始化处理器
 	authHandler := handlers.NewAuthHandler(jwtMiddleware)
 	hostHandler := handlers.NewHostHandler(encryptor)
-	desktopHandler := handlers.NewDesktopHandler(encryptor, cfg.Desktop.MaxDesktopsPerUser)
+	desktopHandler := handlers.NewDesktopHandler(encryptor, cfg.Desktop.MaxDesktopsPerUser, agentServer)
 	statsHandler := handlers.NewStatsHandler()
 
 	// 初始化 Gin 路由
