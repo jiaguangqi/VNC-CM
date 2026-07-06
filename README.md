@@ -289,6 +289,8 @@ Master Service 会定期检查 `running` 会话对应的 VNC 进程和 websockif
 
 节点列表会检查 SSH、当前用户、VNC 工具、websockify、noVNC 和桌面环境；用户申请桌面时，未就绪节点或缺少当前系统用户的节点会被禁用。
 
+管理员可以为节点配置 `allowed_users` 和 `allowed_roles` 访问策略，使用英文逗号分隔；两者都为空表示该节点不限制用户或角色。
+
 ### 数据库模型
 
 核心数据表：

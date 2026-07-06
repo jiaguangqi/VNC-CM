@@ -17,6 +17,8 @@ interface HostRecord {
   total_ram_mb: number;
   region: string;
   az: string;
+  allowed_users: string;
+  allowed_roles: string;
   agent_version: string;
   last_heartbeat: string;
   labels: string[];
@@ -105,7 +107,11 @@ const HostsPage: React.FC = () => {
 
   const handleAddHost = async (values: any) => {
     try {
-      await hostAPI.create(values);
+      await hostAPI.create({
+        ...values,
+        ssh_auth_type: values.ssh_auth_type || "password",
+        ssh_credential: values.ssh_credential || values.ssh_password,
+      });
       message.success("宿主机添加成功");
       setIsModalOpen(false);
       form.resetFields();
@@ -147,7 +153,11 @@ const HostsPage: React.FC = () => {
   const handleEdit = async (values: any) => {
     if (!currentHost) return;
     try {
-      await hostAPI.update(currentHost.id, { max_sessions: parseInt(values.max_sessions) });
+      await hostAPI.update(currentHost.id, {
+        max_sessions: parseInt(values.max_sessions),
+        allowed_users: values.allowed_users || "",
+        allowed_roles: values.allowed_roles || "",
+      });
       message.success(`宿主机 "${currentHost.hostname}" 最大会话数已更新为 ${values.max_sessions}`);
       setIsEditModalOpen(false);
       editForm.resetFields();
@@ -164,6 +174,8 @@ const HostsPage: React.FC = () => {
       ip_address: host.ip_address,
       os_type: host.os_type,
       max_sessions: host.max_sessions,
+      allowed_users: host.allowed_users || "",
+      allowed_roles: host.allowed_roles || "",
     });
     setIsEditModalOpen(true);
   };
@@ -351,6 +363,12 @@ const HostsPage: React.FC = () => {
           <Form.Item name="ssh_port" label="SSH 端口" initialValue={22}>
             <Input type="number" />
           </Form.Item>
+          <Form.Item name="allowed_users" label="允许用户">
+            <Input placeholder="留空表示不限；多个用户用英文逗号分隔" />
+          </Form.Item>
+          <Form.Item name="allowed_roles" label="允许角色">
+            <Input placeholder="留空表示不限；例如 admin,user" />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -382,6 +400,8 @@ const HostsPage: React.FC = () => {
             <Descriptions.Item label="可用区">{currentHost.az || "-"}</Descriptions.Item>
             <Descriptions.Item label="SSH 用户名">{currentHost.ssh_username || "-"}</Descriptions.Item>
             <Descriptions.Item label="SSH 端口">{currentHost.ssh_port || 22}</Descriptions.Item>
+            <Descriptions.Item label="允许用户">{currentHost.allowed_users || "不限"}</Descriptions.Item>
+            <Descriptions.Item label="允许角色">{currentHost.allowed_roles || "不限"}</Descriptions.Item>
             <Descriptions.Item label="Agent 版本">{currentHost.agent_version || "-"}</Descriptions.Item>
             <Descriptions.Item label="最后心跳">
               {currentHost.last_heartbeat
@@ -477,6 +497,12 @@ const HostsPage: React.FC = () => {
             ]}
           >
             <Input type="number" placeholder="如：10" />
+          </Form.Item>
+          <Form.Item name="allowed_users" label="允许用户">
+            <Input placeholder="留空表示不限；多个用户用英文逗号分隔" />
+          </Form.Item>
+          <Form.Item name="allowed_roles" label="允许角色">
+            <Input placeholder="留空表示不限；例如 admin,user" />
           </Form.Item>
         </Form>
       </Modal>

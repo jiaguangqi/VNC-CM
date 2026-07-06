@@ -40,6 +40,8 @@ type CreateHostRequest struct {
 	SSHPublicKey  string `json:"ssh_public_key"`
 	Region        string `json:"region"`
 	AZ            string `json:"az"`
+	AllowedUsers  string `json:"allowed_users"`
+	AllowedRoles  string `json:"allowed_roles"`
 	CPUCores      int    `json:"cpu_cores"`
 	TotalRAMMB    int64  `json:"total_ram_mb"`
 }
@@ -81,6 +83,8 @@ func (h *HostHandler) CreateHost(c *gin.Context) {
 		SSHPublicKey:           req.SSHPublicKey,
 		Region:                 req.Region,
 		AZ:                     req.AZ,
+		AllowedUsers:           req.AllowedUsers,
+		AllowedRoles:           req.AllowedRoles,
 		CPUCores:               req.CPUCores,
 		TotalRAMMB:             req.TotalRAMMB,
 	}
@@ -130,6 +134,8 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 		SSHAuthType     string `json:"ssh_auth_type,omitempty"`
 		Region          string `json:"region"`
 		AZ              string `json:"az"`
+		AllowedUsers    string `json:"allowed_users,omitempty"`
+		AllowedRoles    string `json:"allowed_roles,omitempty"`
 		CPUCores        int    `json:"cpu_cores"`
 		TotalRAMMB      int64  `json:"total_ram_mb"`
 		CreatedAt       string `json:"created_at"`
@@ -150,6 +156,8 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 			SSHAuthType:     h.SSHAuthType,
 			Region:          h.Region,
 			AZ:              h.AZ,
+			AllowedUsers:    h.AllowedUsers,
+			AllowedRoles:    h.AllowedRoles,
 			CPUCores:        h.CPUCores,
 			TotalRAMMB:      h.TotalRAMMB,
 			CreatedAt:       h.CreatedAt.Format("2006-01-02T15:04:05Z"),
@@ -163,6 +171,8 @@ func (h *HostHandler) ListHosts(c *gin.Context) {
 func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 	username, _ := c.Get("username")
 	usernameStr, _ := username.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
 
 	var hosts []models.Host
 	if err := database.DB.
@@ -189,6 +199,9 @@ func (h *HostHandler) ListAvailableDesktopHosts(c *gin.Context) {
 
 	resp := make([]HostOption, 0, len(hosts))
 	for _, host := range hosts {
+		if !services.HostAllowsUser(host, usernameStr, roleStr) {
+			continue
+		}
 		readiness := h.readiness.CheckHost(host, usernameStr)
 		resp = append(resp, HostOption{
 			ID:              host.ID.String(),
@@ -248,6 +261,8 @@ func (h *HostHandler) GetHost(c *gin.Context) {
 		"ssh_port":         host.SSHPort,
 		"region":           host.Region,
 		"az":               host.AZ,
+		"allowed_users":    host.AllowedUsers,
+		"allowed_roles":    host.AllowedRoles,
 	})
 }
 
@@ -258,6 +273,8 @@ type UpdateHostRequest struct {
 	SSHUsername   *string `json:"ssh_username,omitempty"`
 	SSHCredential *string `json:"ssh_credential,omitempty"` // 新凭据，加密后更新
 	SSHPublicKey  *string `json:"ssh_public_key,omitempty"`
+	AllowedUsers  *string `json:"allowed_users,omitempty"`
+	AllowedRoles  *string `json:"allowed_roles,omitempty"`
 }
 
 // UpdateHost 更新宿主机配置（仅管理员）
@@ -287,6 +304,12 @@ func (h *HostHandler) UpdateHost(c *gin.Context) {
 	}
 	if req.SSHPublicKey != nil {
 		updates["ssh_public_key"] = *req.SSHPublicKey
+	}
+	if req.AllowedUsers != nil {
+		updates["allowed_users"] = *req.AllowedUsers
+	}
+	if req.AllowedRoles != nil {
+		updates["allowed_roles"] = *req.AllowedRoles
 	}
 	if req.SSHCredential != nil && *req.SSHCredential != "" {
 		enc, err := h.encryptor.Encrypt(*req.SSHCredential)

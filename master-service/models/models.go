@@ -47,6 +47,8 @@ type Host struct {
 	SSHPublicKey           string         `gorm:"type:text" json:"ssh_public_key,omitempty"` // 公钥指纹
 	Region                 string         `gorm:"size:32" json:"region"`
 	AZ                     string         `gorm:"size:32" json:"az"`
+	AllowedUsers           string         `gorm:"type:text" json:"allowed_users,omitempty"` // comma-separated usernames; empty means unrestricted
+	AllowedRoles           string         `gorm:"type:text" json:"allowed_roles,omitempty"` // comma-separated roles; empty means unrestricted
 	CPUCores               int            `json:"cpu_cores"`
 	TotalRAMMB             int64          `json:"total_ram_mb"`
 	CreatedAt              time.Time      `json:"created_at"`

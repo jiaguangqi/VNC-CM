@@ -156,6 +156,8 @@ func (h *DesktopHandler) GetDesktopDetail(c *gin.Context) {
 func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	uid := userID.(string)
+	role, _ := c.Get("role")
+	roleStr, _ := role.(string)
 
 	// 获取用户信息
 	var user models.User
@@ -197,6 +199,14 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 			return
 		}
 
+		allowedHosts := make([]models.Host, 0, len(hosts))
+		for _, candidate := range hosts {
+			if services.HostAllowsUser(candidate, linuxUser, roleStr) {
+				allowedHosts = append(allowedHosts, candidate)
+			}
+		}
+		hosts = allowedHosts
+
 		if len(hosts) == 0 {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前无可用宿主机，请稍后再试"})
 			return
@@ -214,6 +224,11 @@ func (h *DesktopHandler) CreateDesktop(c *gin.Context) {
 
 	if host.SSHUsername == "" || host.SSHCredentialEncrypted == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "宿主机 SSH 凭据未配置，无法创建桌面"})
+		return
+	}
+
+	if !services.HostAllowsUser(host, linuxUser, roleStr) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "当前用户无权在该宿主机上创建桌面"})
 		return
 	}
 
